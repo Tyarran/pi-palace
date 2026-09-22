@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type CheckpointMode = "silent" | "blocking";
+export type InjectWakeUpMode = "sync" | "async";
 
 export interface DailyMineSettings {
 	enabled: boolean;
@@ -19,8 +20,16 @@ export interface ModelSettings {
 	id: string;
 }
 
-export interface InjectUserProfileSettings {
+export interface InjectWakeUpSettings {
 	enabled: boolean;
+	// "sync": the first response waits for the wake-up fetch (CLI, ~2-3s) —
+	// guarantees the first message is personalized, at the cost of latency.
+	// "async": fire-and-forget from session_start, injected whichever turn
+	// it happens to be ready by (may not be the first one). diary_read is
+	// ALWAYS best-effort/async regardless of this mode — never awaited, so
+	// in "sync" mode it will most often be missing from the injected digest
+	// (the MCP connection has barely started by the time wake-up resolves).
+	mode: InjectWakeUpMode;
 }
 
 export interface McpSettings {
@@ -36,7 +45,7 @@ export interface AutosaveSettings {
 	// No default on purpose: absence means checkpoint features are disabled
 	// (see index.ts) rather than silently falling back to a hardcoded model.
 	model: ModelSettings | undefined;
-	injectUserProfile: InjectUserProfileSettings;
+	injectWakeUp: InjectWakeUpSettings;
 	mcp: McpSettings;
 }
 
@@ -49,10 +58,13 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 		wing: "pi",
 		limit: 100,
 	},
-	// Unlike dailyMine, enabled by default: startup profile injection is
+	// Unlike dailyMine, enabled by default: startup wake-up injection is
 	// considered low-risk (read-only, best-effort, silent on failure).
-	injectUserProfile: {
+	// mode defaults to "sync": guaranteeing a personalized first response is
+	// preferred over shaving off a couple seconds of first-response latency.
+	injectWakeUp: {
 		enabled: true,
+		mode: "sync",
 	},
 	mcp: {
 		full: { enabled: false },
@@ -60,13 +72,13 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 };
 
 interface RawSettingsShape {
-	mempalaceAutosave?: Partial<{
+	piPalace?: Partial<{
 		interval: number;
 		mode: CheckpointMode;
 		userWing: string;
 		dailyMine: Partial<DailyMineSettings>;
 		model: Partial<ModelSettings>;
-		injectUserProfile: Partial<InjectUserProfileSettings>;
+		injectWakeUp: Partial<InjectWakeUpSettings>;
 		mcp: Partial<{ full: Partial<{ enabled: boolean }> }>;
 	}>;
 }
@@ -81,7 +93,7 @@ async function readJsonSafe(path: string): Promise<RawSettingsShape | undefined>
 }
 
 /**
- * Reads the `mempalaceAutosave` namespace from global + project settings.json,
+ * Reads the `piPalace` namespace from global + project settings.json,
  * merging project over global (matching pi's own settings precedence).
  * There is no documented ExtensionContext API for arbitrary custom settings
  * namespaces, so we read the files directly — same approach other extensions
@@ -95,8 +107,8 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 
 	const merged = {
 		...DEFAULTS,
-		...globalRaw?.mempalaceAutosave,
-		...projectRaw?.mempalaceAutosave,
+		...globalRaw?.piPalace,
+		...projectRaw?.piPalace,
 	};
 
 	const interval = Number.isFinite(merged.interval) && merged.interval > 0 ? Math.floor(merged.interval) : DEFAULTS.interval;
@@ -105,8 +117,8 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 
 	const rawDailyMine = {
 		...DEFAULTS.dailyMine,
-		...globalRaw?.mempalaceAutosave?.dailyMine,
-		...projectRaw?.mempalaceAutosave?.dailyMine,
+		...globalRaw?.piPalace?.dailyMine,
+		...projectRaw?.piPalace?.dailyMine,
 	};
 	const dailyMine: DailyMineSettings = {
 		enabled: rawDailyMine.enabled === true,
@@ -114,29 +126,30 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		limit: Number.isFinite(rawDailyMine.limit) && (rawDailyMine.limit as number) >= 0 ? Math.floor(rawDailyMine.limit as number) : DEFAULTS.dailyMine.limit,
 	};
 
-	const rawModel = projectRaw?.mempalaceAutosave?.model ?? globalRaw?.mempalaceAutosave?.model;
+	const rawModel = projectRaw?.piPalace?.model ?? globalRaw?.piPalace?.model;
 	const model: ModelSettings | undefined =
 		rawModel && typeof rawModel.provider === "string" && rawModel.provider.trim() && typeof rawModel.id === "string" && rawModel.id.trim()
 			? { provider: rawModel.provider.trim(), id: rawModel.id.trim() }
 			: undefined;
 
-	const rawInjectUserProfile = {
-		...DEFAULTS.injectUserProfile,
-		...globalRaw?.mempalaceAutosave?.injectUserProfile,
-		...projectRaw?.mempalaceAutosave?.injectUserProfile,
+	const rawInjectWakeUp = {
+		...DEFAULTS.injectWakeUp,
+		...globalRaw?.piPalace?.injectWakeUp,
+		...projectRaw?.piPalace?.injectWakeUp,
 	};
-	const injectUserProfile: InjectUserProfileSettings = {
-		enabled: rawInjectUserProfile.enabled !== false, // default true unless explicitly disabled
+	const injectWakeUp: InjectWakeUpSettings = {
+		enabled: rawInjectWakeUp.enabled !== false, // default true unless explicitly disabled
+		mode: rawInjectWakeUp.mode === "async" ? "async" : "sync",
 	};
 
 	const rawMcpFull = {
 		...DEFAULTS.mcp.full,
-		...globalRaw?.mempalaceAutosave?.mcp?.full,
-		...projectRaw?.mempalaceAutosave?.mcp?.full,
+		...globalRaw?.piPalace?.mcp?.full,
+		...projectRaw?.piPalace?.mcp?.full,
 	};
 	const mcp: McpSettings = {
 		full: { enabled: rawMcpFull.enabled === true },
 	};
 
-	return { interval, mode, userWing, dailyMine, model, injectUserProfile, mcp };
+	return { interval, mode, userWing, dailyMine, model, injectWakeUp, mcp };
 }

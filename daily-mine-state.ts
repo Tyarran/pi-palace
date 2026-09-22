@@ -10,7 +10,7 @@ export interface DailyMineState {
 // Same state directory convention as the official mempal_save_hook.sh
 // (~/.mempalace/hook_state/) — consistent with the rest of the MemPalace
 // ecosystem rather than inventing a new location.
-const STATE_PATH = join(homedir(), ".mempalace", "hook_state", "pi-mempalace-autosave-daily-mine.json");
+const STATE_PATH = join(homedir(), ".mempalace", "hook_state", "pi-palace-daily-mine.json");
 
 export function todayISO(): string {
 	const now = new Date();

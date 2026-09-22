@@ -4,7 +4,7 @@ import { countRelevantUserMessages, extractAllExchanges, extractRecentExchanges 
 import { CHECKPOINT_SYSTEM_PROMPT, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_SUCCESS } from "./constants.js";
 import { maybeRunDailyMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
-import { buildPersonalizationContext } from "./personalize.js";
+import { fetchDiaryDigest, fetchWakeUpDigest } from "./personalize.js";
 import { type AutosaveSettings, loadAutosaveSettings } from "./settings.js";
 
 /**
@@ -31,7 +31,7 @@ export default function (pi: ExtensionAPI) {
 		userWing: undefined,
 		dailyMine: { enabled: false, wing: "pi", limit: 100 },
 		model: undefined,
-		injectUserProfile: { enabled: true },
+		injectWakeUp: { enabled: true, mode: "sync" },
 		mcp: { full: { enabled: false } },
 	};
 	let lastCheckpointCount = 0;
@@ -39,14 +39,17 @@ export default function (pi: ExtensionAPI) {
 	// resolution below. Defaults to disabled until session_start has run.
 	let checkpointDisabled = true;
 	// Guards before_agent_start, which fires on EVERY prompt, not just the
-	// first — profile injection must only be attempted (i.e. actually
+	// first — wake-up injection must only be attempted (i.e. actually
 	// applied) once per session.
 	let profileInjected = false;
-	// undefined = fetch still in flight or not started, null = fetch failed,
-	// string = ready to inject. Fetched fire-and-forget from session_start so
-	// it never blocks the first response — injected on whichever turn it
-	// happens to be ready by (often not the very first one, deliberately).
-	let profileDigest: string | null | undefined;
+	// undefined = fetch still in flight or not started (async mode only, see
+	// below), null = fetch failed, string = ready. Only populated in "async"
+	// mode — in "sync" mode wake-up is fetched directly inside
+	// before_agent_start instead, so this stays unused there.
+	let wakeUpDigest: string | null | undefined;
+	// ALWAYS fire-and-forget regardless of injectWakeUp.mode — diary_read is
+	// never awaited by before_agent_start, in either mode (see personalize.ts).
+	let diaryDigest: string | null | undefined;
 	// The persistent MCP connections (light mandatory, full opt-in), shared
 	// by the main session's registered tools AND the checkpoint sub-agent /
 	// profile digest — see mcp-manager.ts for why this replaced the old
@@ -61,7 +64,7 @@ export default function (pi: ExtensionAPI) {
 			checkpointDisabled = true;
 			if (ctx.hasUI) {
 				ctx.ui.notify(
-					"pi-mempalace-autosave: no model configured for checkpoint (mempalaceAutosave.model) — checkpoints disabled.",
+					"pi-palace: no model configured for checkpoint (piPalace.model) — checkpoints disabled.",
 					"warning",
 				);
 			}
@@ -70,7 +73,7 @@ export default function (pi: ExtensionAPI) {
 			checkpointDisabled = !resolved;
 			if (!resolved && ctx.hasUI) {
 				ctx.ui.notify(
-					`pi-mempalace-autosave: configured model not found (${settings.model.provider}/${settings.model.id}) — checkpoints disabled.`,
+					`pi-palace: configured model not found (${settings.model.provider}/${settings.model.id}) — checkpoints disabled.`,
 					"warning",
 				);
 			}
@@ -78,7 +81,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (!settings.userWing && ctx.hasUI) {
 			ctx.ui.notify(
-				'pi-mempalace-autosave: "userWing" is not configured in settings.json (mempalaceAutosave.userWing) — user preference filing will be skipped.',
+				'pi-palace: "userWing" is not configured in settings.json (piPalace.userWing) — user preference filing will be skipped.',
 				"warning",
 			);
 		}
@@ -86,7 +89,11 @@ export default function (pi: ExtensionAPI) {
 		mcpManager?.close();
 		mcpManager = null;
 		profileInjected = false;
-		profileDigest = undefined;
+		wakeUpDigest = undefined;
+		diaryDigest = undefined;
+
+		const wing = settings.userWing;
+		const injectEnabled = settings.injectWakeUp.enabled;
 
 		// Fire-and-forget — connecting to the MCP servers and registering their
 		// tools (tools/list can take a while under palace contention, same
@@ -94,27 +101,40 @@ export default function (pi: ExtensionAPI) {
 		// never block session_start. Newly registered tools still appear
 		// immediately in the running session once ready (no /reload needed), so
 		// this only delays WHEN palace_query/palace_exec become callable, not
-		// the session's responsiveness.
-		const wing = settings.userWing;
-		const injectProfile = settings.injectUserProfile.enabled;
+		// the session's responsiveness. diary_read (always best-effort, never
+		// awaited by before_agent_start regardless of injectWakeUp.mode) rides
+		// along once the connection is ready.
 		initMcpManager(pi, settings)
 			.then((manager) => {
 				mcpManager = manager;
-				if (injectProfile && wing) {
-					buildPersonalizationContext(wing, manager)
+				if (injectEnabled && wing) {
+					fetchDiaryDigest(manager)
 						.then((d) => {
-							profileDigest = d;
+							diaryDigest = d;
 						})
 						.catch(() => {
-							profileDigest = null;
+							diaryDigest = null;
 						});
 				}
 			})
 			.catch((err) => {
-				safeNotify(ctx, "pi-mempalace-autosave: MCP connection failed ❌", "error");
-				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-mempalace-autosave] MCP init error:", err);
-				profileDigest = null;
+				safeNotify(ctx, "pi-palace: MCP connection failed ❌", "error");
+				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] MCP init error:", err);
+				diaryDigest = null;
 			});
+
+		// wake-up is only pre-fetched fire-and-forget in "async" mode. In "sync"
+		// mode it's fetched directly inside before_agent_start instead, so the
+		// first response actually waits for it.
+		if (injectEnabled && wing && settings.injectWakeUp.mode === "async") {
+			fetchWakeUpDigest(wing)
+				.then((d) => {
+					wakeUpDigest = d;
+				})
+				.catch(() => {
+					wakeUpDigest = null;
+				});
+		}
 
 		// Fire-and-forget — never blocks session_start, even though the daily
 		// mine itself awaits the daemon job internally (can take a long time
@@ -129,40 +149,52 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (process.env.MEMPALACE_AUTOSAVE_DEBUG) {
-			console.error(
-				"[pi-mempalace-autosave] DEBUG before_agent_start: enabled=",
-				settings.injectUserProfile.enabled,
-				"profileInjected=",
-				profileInjected,
-				"userWing=",
-				settings.userWing,
-				"profileDigest=",
-				profileDigest === undefined ? "undefined (not ready)" : profileDigest === null ? "null (failed)" : `ready (${profileDigest.length} chars)`,
-			);
-		}
-		if (!settings.injectUserProfile.enabled || profileInjected || !settings.userWing) {
+		if (!settings.injectWakeUp.enabled || profileInjected || !settings.userWing) {
 			return;
 		}
-		if (profileDigest === undefined) {
-			// Not ready yet — skip this turn without blocking, try again next
-			// turn (profileInjected stays false until an actual attempt lands).
-			return;
+
+		let wakeUpPart: string | null;
+		if (settings.injectWakeUp.mode === "sync") {
+			// Blocks THIS turn (i.e. the response) for the wake-up fetch alone
+			// (~2-3s) — the whole point of "sync" mode: guarantee the first
+			// response is personalized, at the cost of that latency.
+			wakeUpPart = await fetchWakeUpDigest(settings.userWing).catch(() => null);
+		} else {
+			if (wakeUpDigest === undefined) {
+				// Not ready yet — skip this turn without blocking, try again next
+				// turn (profileInjected stays false until an actual attempt lands).
+				return;
+			}
+			wakeUpPart = wakeUpDigest;
 		}
+
 		profileInjected = true; // one applied attempt per session, success or failure
 
-		if (profileDigest === null) {
-			if (ctx.hasUI) ctx.ui.notify("pi-mempalace-autosave: user profile injection unavailable ⚠️", "warning");
-			if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-mempalace-autosave] DEBUG profile injection FAILED (digest null)");
+		// diary_read: take whatever is available RIGHT NOW, never wait for it
+		// (see personalize.ts) — in "sync" mode this is almost always still
+		// undefined/missing, since the MCP connection has barely started by
+		// the time the fast wake-up fetch resolves. Accepted trade-off.
+		const parts = [wakeUpPart, diaryDigest].filter((p): p is string => Boolean(p));
+
+		if (process.env.MEMPALACE_AUTOSAVE_DEBUG) {
+			console.error(
+				"[pi-palace] DEBUG wake-up injection: mode=",
+				settings.injectWakeUp.mode,
+				"wakeUpPart=",
+				wakeUpPart ? `${wakeUpPart.length} chars` : "missing",
+				"diaryDigest=",
+				diaryDigest ? `${diaryDigest.length} chars` : "missing",
+			);
+		}
+
+		if (parts.length === 0) {
+			if (ctx.hasUI) ctx.ui.notify("pi-palace: wake-up injection unavailable ⚠️", "warning");
 			return;
 		}
 
-		if (process.env.MEMPALACE_AUTOSAVE_DEBUG) {
-			console.error(`[pi-mempalace-autosave] DEBUG profile injection APPLIED (${profileDigest.length} chars added to system prompt):`);
-			console.error(profileDigest);
-		}
+		const digest = parts.join("\n\n");
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n<mempalace-user-profile>\n${profileDigest}\n</mempalace-user-profile>`,
+			systemPrompt: `${event.systemPrompt}\n\n<mempalace-user-profile>\n${digest}\n</mempalace-user-profile>`,
 		};
 	});
 
@@ -195,12 +227,12 @@ export default function (pi: ExtensionAPI) {
 		description: "Manually trigger a MemPalace checkpoint (same behavior as the automatic one)",
 		handler: async (_args, ctx) => {
 			if (checkpointDisabled || !mcpManager) {
-				ctx.ui.notify("pi-mempalace-autosave: checkpoint disabled (model not configured/found, or MCP unavailable)", "warning");
+				ctx.ui.notify("pi-palace: checkpoint disabled (model not configured/found, or MCP unavailable)", "warning");
 				return;
 			}
 			if (!settings.userWing) {
 				ctx.ui.notify(
-					'pi-mempalace-autosave: "userWing" is not configured in settings.json (mempalaceAutosave.userWing)',
+					'pi-palace: "userWing" is not configured in settings.json (piPalace.userWing)',
 					"warning",
 				);
 				return;
@@ -239,7 +271,7 @@ async function triggerCheckpoint(
 			safeNotify(ctx, TOAST_SUCCESS, "info");
 		} catch (err) {
 			safeNotify(ctx, TOAST_ERROR, "error");
-			if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-mempalace-autosave] error:", err);
+			if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] error:", err);
 		}
 	};
 

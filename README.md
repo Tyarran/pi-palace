@@ -1,4 +1,4 @@
-# pi-mempalace-autosave
+# pi-palace
 
 A pi extension that automatically feeds [MemPalace](https://github.com/MemPalace/mempalace) with the content of your pi sessions — no manual intervention, no skills or commands to remember.
 
@@ -19,7 +19,7 @@ The curated checkpoint and the exhaustive mine are **not redundant**: the first 
 
 ## Installation
 
-Place the folder at `~/.pi/agent/extensions/pi-mempalace-autosave/` (auto-discovered by pi). Requires:
+Place the folder at `~/.pi/agent/extensions/pi-palace/` (auto-discovered by pi). Requires:
 - The `mempalace` CLI installed and on `PATH` (`uv tool install mempalace` or `pipx install mempalace`)
 - A configured model (see below) — **without it, checkpointing is disabled**
 
@@ -31,7 +31,7 @@ In `~/.pi/agent/settings.json` (global) or `.pi/settings.json` (project):
 
 ```json
 {
-  "mempalaceAutosave": {
+  "piPalace": {
     "interval": 15,
     "mode": "silent",
     "userWing": "romain",
@@ -44,8 +44,9 @@ In `~/.pi/agent/settings.json` (global) or `.pi/settings.json` (project):
       "wing": "pi",
       "limit": 100
     },
-    "injectUserProfile": {
-      "enabled": true
+    "injectWakeUp": {
+      "enabled": true,
+      "mode": "sync"
     }
   }
 }
@@ -60,7 +61,8 @@ In `~/.pi/agent/settings.json` (global) or `.pi/settings.json` (project):
 | `dailyMine.enabled` | `boolean` | `false` | Enables the daily exhaustive mine of pi sessions |
 | `dailyMine.wing` | `string` | `"pi"` | Target wing for the daily mine |
 | `dailyMine.limit` | `number` | `100` | Max files processed **per run** (mempalace mine's own `--limit` convention: `0` = unlimited). Caps the worst case for someone installing the extension after a long pi history — spreads a big backlog over several days instead of one very long first run. Ordering of which files get picked isn't guaranteed |
-| `injectUserProfile.enabled` | `boolean` | `true` | Enables the startup profile digest (MemPalace wake-up injected into the system prompt) |
+| `injectWakeUp.enabled` | `boolean` | `true` | Enables the startup wake-up digest (injected into the system prompt) |
+| `injectWakeUp.mode` | `"sync" \| "async"` | `"sync"` | `sync` = first response waits for the wake-up fetch (guarantees personalization from message 1). `async` = fire-and-forget, never blocks, injected whenever ready. `mempalace_diary_read` is always best-effort regardless of this setting — see below |
 
 ### Why no default model?
 
@@ -91,7 +93,7 @@ Triggers the exact same pipeline as the automatic one, on demand. Resyncs the in
 
 ### Daily mine (`session_start`, if `dailyMine.enabled`)
 
-At most once per calendar day (state persisted in `~/.mempalace/hook_state/pi-mempalace-autosave-daily-mine.json`), the extension:
+At most once per calendar day (state persisted in `~/.mempalace/hook_state/pi-palace-daily-mine.json`), the extension:
 
 1. Checks/starts the MemPalace daemon if needed
 2. Submits a `mempalace mine ~/.pi/agent/sessions/ --mode convos` job with a fixed `dedupe_key`, so no concurrent pi session can submit an active duplicate
@@ -101,17 +103,18 @@ At most once per calendar day (state persisted in `~/.mempalace/hook_state/pi-me
 
 MemPalace natively supports the pi session format (detected by JSON structure, not by path) — no prior conversion needed.
 
-### Startup profile injection (`before_agent_start`, if `injectUserProfile.enabled`)
+### Startup wake-up injection (`before_agent_start`, if `injectWakeUp.enabled`)
 
-Fetches `mempalace wake-up --wing <userWing>` (CLI, L0 identity + L1 essential story, ~600-900 tokens) and injects it **silently** into the system prompt — never shown as a visible message.
+Fetches `mempalace wake-up --wing <userWing>` (CLI, L0 identity + L1 essential story, ~600-900 tokens) plus the current agent's last 5 diary entries (via the shared persistent MCP connection — see "MCP connection" below), and injects both **silently** into the system prompt — never shown as a visible message. Injection happens **once** per session, guarded so it's never re-applied on later turns.
 
-The fetch is kicked off **fire-and-forget at `session_start`**, not awaited before the first response. In practice this means the very first reply of a session is usually *not* personalized (the fetch takes ~2-3s, so it typically finishes before the second message), while every later turn benefits from it as soon as it's ready. This was a deliberate trade-off after testing: awaiting the fetch inside `before_agent_start` blocked the first response, adding several seconds of latency before the agent could say anything.
+**`injectWakeUp.mode` controls how the wake-up part (not diary) is fetched:**
 
-Injection itself still only happens **once** per session, on whichever turn the digest happens to be ready by — guarded so it's never re-applied on subsequent turns.
+- **`"sync"` (default)** — the first response **waits** for the wake-up fetch (CLI, ~2-3s) before generating, guaranteeing the very first reply is personalized. Latency cost accepted deliberately: a personalized first response was judged more valuable than shaving off those seconds.
+- **`"async"`** — fire-and-forget from `session_start`, injected on whichever turn it happens to be ready by (often the second message, not the first). Never blocks any response.
 
-`mempalace_diary_read` was tried twice and dropped both times. First, awaited synchronously: it added ~30s to the first response (our one-shot MCP client spawns a fresh `mempalace-mcp` process per call, paying a full chromadb/onnxruntime/embedding-model startup cost every time). Second, after making the fetch fire-and-forget: the response was no longer delayed, but the spawned child process kept the Node process itself alive for ~30s before exit — harmless in interactive mode, but breaks `pi -p` / scripting use cases. Instead, the injected digest includes a note telling the agent it can call `mempalace_diary_read` itself on demand, through its own already-connected MCP session (fast, no extra process spawn).
+**`mempalace_diary_read` is ALWAYS best-effort/fire-and-forget, regardless of `mode`** — it is never awaited by `before_agent_start`. In `"async"` mode it usually has time to be ready by the injection turn. In `"sync"` mode it almost never is (the MCP connection has barely started by the time the fast wake-up fetch resolves) — diary content is then simply omitted from the digest for that session, with no retry. This was a deliberate simplification: an earlier design tried to make the whole digest — wake-up **and** diary — either fully sync or fully async together, but `diary_read`'s own latency profile (via a freshly spawned one-shot MCP client, before the persistent-connection refactor) made that impractical; splitting the two lets `sync` mode keep its guarantee cheap.
 
-On failure (e.g. a palace write lock held by another process), a discreet warning toast fires once the fetch resolves — never blocks startup.
+On failure (e.g. a palace write lock held by another process, or nothing at all resolved), a discreet warning toast fires — never blocks startup.
 
 ---
 

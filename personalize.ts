@@ -5,33 +5,33 @@ const DIARY_AGENT_NAME = "pi";
 const DIARY_LAST_N = 5;
 
 /**
- * Builds the session-start personalization digest: MemPalace's own
- * wake-up (L0 identity + L1 essential story, scoped to userWing) combined
- * with the current agent's last N diary entries.
- *
- * diary_read now reuses the shared persistent MCP connection (mcpManager)
- * instead of spawning a one-shot mempalace-mcp process per call — the
- * approach that previously cost ~30s per attempt (twice tried and dropped:
- * once as a synchronous await that blocked the first response, once
- * fire-and-forget where the spawned child kept the Node process alive).
- * With a connection already warm from session_start, this call is now just
- * a fast JSON-RPC round-trip.
+ * The guaranteed, fast part of the startup digest — CLI-based `mempalace
+ * wake-up`, ~2-3s. Split out from diary fetching specifically so callers
+ * can await this alone in "sync" mode without also waiting on the MCP
+ * connection (see fetchDiaryDigest).
  */
-export async function buildPersonalizationContext(userWing: string, mcpManager: McpManager): Promise<string | null> {
-	const [wakeUp, diaryResult] = await Promise.all([
-		getWakeUpContext(userWing),
-		mcpManager.callLightTool("palace_query", { target: "diary_read", agent_name: DIARY_AGENT_NAME, last_n: DIARY_LAST_N }).catch(() => null),
-	]);
+export async function fetchWakeUpDigest(userWing: string): Promise<string | null> {
+	const wakeUp = await getWakeUpContext(userWing);
+	return wakeUp ? `## MemPalace wake-up\n${wakeUp}` : null;
+}
 
-	const parts: string[] = [];
-	if (wakeUp) parts.push(`## MemPalace wake-up\n${wakeUp}`);
+/**
+ * The best-effort part of the startup digest — the current agent's last N
+ * diary entries, via the shared persistent MCP connection. ALWAYS
+ * fire-and-forget, regardless of injectWakeUp.mode: the caller (index.ts)
+ * never awaits this before injecting the system prompt. In "sync" mode
+ * this means diary content will very often be missing (the MCP connection
+ * has barely started by the time the fast wake-up fetch resolves) — an
+ * accepted trade-off, not a bug.
+ */
+export async function fetchDiaryDigest(mcpManager: McpManager): Promise<string | null> {
+	const diaryResult = await mcpManager
+		.callLightTool("palace_query", { target: "diary_read", agent_name: DIARY_AGENT_NAME, last_n: DIARY_LAST_N })
+		.catch(() => null);
 
 	const diaryText = diaryResult?.content
 		?.map((c) => c.text ?? "")
 		.join("\n")
 		.trim();
-	if (diaryText) parts.push(`## Recent agent diary (last ${DIARY_LAST_N}, agent: ${DIARY_AGENT_NAME})\n${diaryText}`);
-
-	if (parts.length === 0) return null;
-	return parts.join("\n\n");
+	return diaryText ? `## Recent agent diary (last ${DIARY_LAST_N}, agent: ${DIARY_AGENT_NAME})\n${diaryText}` : null;
 }

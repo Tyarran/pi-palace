@@ -124,7 +124,7 @@ export class PersistentMcpClient {
 			{
 				protocolVersion: "2024-11-05",
 				capabilities: {},
-				clientInfo: { name: "pi-mempalace-autosave", version: "0.1.0" },
+				clientInfo: { name: "pi-palace", version: "0.1.0" },
 			},
 			true,
 		);

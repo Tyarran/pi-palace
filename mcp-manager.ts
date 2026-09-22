@@ -61,7 +61,7 @@ export async function initMcpManager(pi: ExtensionAPI, settings: AutosaveSetting
 				// close just the failed one instead of tearing everything down.
 				full.close();
 				full = null;
-				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-mempalace-autosave] full MCP server init failed:", err);
+				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] full MCP server init failed:", err);
 			}
 		}
 
