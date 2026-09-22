@@ -41,7 +41,8 @@ In `~/.pi/agent/settings.json` (global) or `.pi/settings.json` (project):
     },
     "dailyMine": {
       "enabled": false,
-      "wing": "pi"
+      "wing": "pi",
+      "limit": 100
     },
     "injectUserProfile": {
       "enabled": true
@@ -58,6 +59,7 @@ In `~/.pi/agent/settings.json` (global) or `.pi/settings.json` (project):
 | `model.provider` / `model.id` | `string` | *(none)* | Model used by the curation sub-agent. **Required** — any provider supported (Anthropic, OpenAI, Google...). No default on purpose: lets you swap models after a benchmark without favoring one provider |
 | `dailyMine.enabled` | `boolean` | `false` | Enables the daily exhaustive mine of pi sessions |
 | `dailyMine.wing` | `string` | `"pi"` | Target wing for the daily mine |
+| `dailyMine.limit` | `number` | `100` | Max files processed **per run** (mempalace mine's own `--limit` convention: `0` = unlimited). Caps the worst case for someone installing the extension after a long pi history — spreads a big backlog over several days instead of one very long first run. Ordering of which files get picked isn't guaranteed |
 | `injectUserProfile.enabled` | `boolean` | `true` | Enables the startup profile digest (MemPalace wake-up injected into the system prompt) |
 
 ### Why no default model?

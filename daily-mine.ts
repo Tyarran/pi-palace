@@ -46,7 +46,7 @@ export async function maybeRunDailyMine(settings: AutosaveSettings, ctx: Minimal
 	// completion toast is shown (deliberate trade-off — waiting for the
 	// real result could block behind an arbitrarily long queue and delay
 	// pi's own process exit, as observed during testing).
-	const result = await submitDailyMineJob(sessionsDir, settings.dailyMine.wing);
+	const result = await submitDailyMineJob(sessionsDir, settings.dailyMine.wing, settings.dailyMine.limit);
 
 	if (result.success) {
 		await writeState({ lastAttemptDate: today, lastSuccessDate: today });

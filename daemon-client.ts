@@ -87,7 +87,7 @@ export async function ensureDaemonRunning(): Promise<boolean> {
  * process exit far longer than acceptable. The cost: we lose the
  * "finished" toast — success here means "submitted", not "completed".
  */
-export async function submitDailyMineJob(sessionsDir: string, wing: string): Promise<DaemonMineResult> {
+export async function submitDailyMineJob(sessionsDir: string, wing: string, limit: number): Promise<DaemonMineResult> {
 	const script = [
 		"import json, sys",
 		"from mempalace.daemon import submit_job, DaemonError",
@@ -103,7 +103,7 @@ export async function submitDailyMineJob(sessionsDir: string, wing: string): Pro
 		"            'dry_run': False,",
 		"            'extract': 'exchange',",
 		"            'include_ignored': [],",
-		"            'limit': 0,",
+		"            'limit': payload['limit'],",
 		"            'max_chunks_per_file': None,",
 		"            'no_gitignore': False,",
 		"            'redetect_origin': False,",
@@ -120,7 +120,8 @@ export async function submitDailyMineJob(sessionsDir: string, wing: string): Pro
 		"    print(json.dumps({'success': False, 'error': str(exc)}))",
 	].join("\n");
 
-	const payload = JSON.stringify({ source: sessionsDir, wing, dedupe_key: DAILY_MINE_DEDUPE_KEY });
+	// limit follows mempalace mine's own --limit convention: 0 = unlimited.
+	const payload = JSON.stringify({ source: sessionsDir, wing, limit, dedupe_key: DAILY_MINE_DEDUPE_KEY });
 
 	try {
 		const python = await resolveMempalacePython();

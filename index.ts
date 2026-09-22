@@ -29,7 +29,7 @@ export default function (pi: ExtensionAPI) {
 		interval: 15,
 		mode: "silent",
 		userWing: undefined,
-		dailyMine: { enabled: false, wing: "pi" },
+		dailyMine: { enabled: false, wing: "pi", limit: 100 },
 		model: undefined,
 		injectUserProfile: { enabled: true },
 		mcp: { full: { enabled: false } },

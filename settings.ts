@@ -7,6 +7,11 @@ export type CheckpointMode = "silent" | "blocking";
 export interface DailyMineSettings {
 	enabled: boolean;
 	wing: string;
+	// Max files processed per run (mempalace mine's own --limit convention:
+	// 0 = unlimited). Caps the worst case for someone installing the
+	// extension after a long pi history — spreads a big backlog over
+	// several days instead of one very long first run.
+	limit: number;
 }
 
 export interface ModelSettings {
@@ -42,6 +47,7 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 	dailyMine: {
 		enabled: false,
 		wing: "pi",
+		limit: 100,
 	},
 	// Unlike dailyMine, enabled by default: startup profile injection is
 	// considered low-risk (read-only, best-effort, silent on failure).
@@ -105,6 +111,7 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 	const dailyMine: DailyMineSettings = {
 		enabled: rawDailyMine.enabled === true,
 		wing: typeof rawDailyMine.wing === "string" && rawDailyMine.wing.trim() ? rawDailyMine.wing.trim() : DEFAULTS.dailyMine.wing,
+		limit: Number.isFinite(rawDailyMine.limit) && (rawDailyMine.limit as number) >= 0 ? Math.floor(rawDailyMine.limit as number) : DEFAULTS.dailyMine.limit,
 	};
 
 	const rawModel = projectRaw?.mempalaceAutosave?.model ?? globalRaw?.mempalaceAutosave?.model;
