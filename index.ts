@@ -4,7 +4,7 @@ import { countRelevantUserMessages, extractAllExchanges, extractRecentExchanges 
 import { CHECKPOINT_SYSTEM_PROMPT, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_SUCCESS } from "./constants.js";
 import { maybeRunDailyMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
-import { fetchDiaryDigest, fetchWakeUpDigest } from "./personalize.js";
+import { fetchDiaryDigest, fetchWakeUpDigest } from "./wake-up.js";
 import { type AutosaveSettings, loadAutosaveSettings } from "./settings.js";
 
 /**
@@ -48,7 +48,7 @@ export default function (pi: ExtensionAPI) {
 	// before_agent_start instead, so this stays unused there.
 	let wakeUpDigest: string | null | undefined;
 	// ALWAYS fire-and-forget regardless of injectWakeUp.mode — diary_read is
-	// never awaited by before_agent_start, in either mode (see personalize.ts).
+	// never awaited by before_agent_start, in either mode (see wake-up.ts).
 	let diaryDigest: string | null | undefined;
 	// The persistent MCP connections (light mandatory, full opt-in), shared
 	// by the main session's registered tools AND the checkpoint sub-agent /
@@ -171,7 +171,7 @@ export default function (pi: ExtensionAPI) {
 		profileInjected = true; // one applied attempt per session, success or failure
 
 		// diary_read: take whatever is available RIGHT NOW, never wait for it
-		// (see personalize.ts) — in "sync" mode this is almost always still
+		// (see wake-up.ts) — in "sync" mode this is almost always still
 		// undefined/missing, since the MCP connection has barely started by
 		// the time the fast wake-up fetch resolves. Accepted trade-off.
 		const parts = [wakeUpPart, diaryDigest].filter((p): p is string => Boolean(p));

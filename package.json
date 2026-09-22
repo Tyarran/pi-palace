@@ -1,0 +1,9 @@
+{
+  "name": "pi-palace",
+  "version": "0.1.0",
+  "description": "Automatic MemPalace memory integration for pi — curated checkpoints, daily exhaustive mining, centralized MCP connection, and startup wake-up injection.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
