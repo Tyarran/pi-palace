@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import type { MemoryRecallLevel } from "./settings.js";
 
 export const TOAST_STARTED = "MemPalace checkpoint en cours...";
 export const TOAST_SUCCESS = "MemPalace checkpoint sauvegardé ✅";
@@ -61,3 +62,30 @@ export const PRECOMPACT_SYSTEM_PROMPT = (userWing: string, cwd: string, diaryWin
 
 This is an emergency save before detailed context is lost. Be thorough — this is your last chance to capture this conversation's content before it's gone. Save more liberally than usual: prefer filing something borderline over losing it.
 `;
+
+// "sometimes": generous but never forced — the default, intended behavior.
+const MEMORY_RECALL_INSTRUCTION_SOMETIMES = `## Using memory context to build continuity
+
+You have been given a digest of recent context above (<mempalace-user-profile>) and a \`palace_query\` tool for searching further.
+
+Treat conversations with this user as part of an ongoing relationship, not isolated sessions. Be generous in recognizing connections — err on the side of mentioning a relevant past topic/decision rather than staying silent about it.
+
+- When something in the current conversation clearly connects to a topic, decision, or discussion from the digest above, or from a \`palace_query\` search, say so explicitly and naturally (e.g. "This is the same idea we discussed about X" / "This matches the decision we made on Y"). Make the user feel like they're talking to the same person across sessions.
+- If you're unsure whether something has already been discussed and it seems plausibly relevant, use \`palace_query\` to check before answering, rather than assuming it hasn't come up.
+- Don't force a callback when there's no real connection — a relevant recall should feel helpful, not like a checklist item. Not every response needs one.
+- Scope is global: relevant memories may come from any past project or topic, not just the current one.`;
+
+// "always": experimental, evaluated at usage — a callback in every response
+// regardless of relevance, no "skip it if there's nothing real" escape hatch.
+const MEMORY_RECALL_INSTRUCTION_ALWAYS = `## Using memory context to build continuity
+
+You have been given a digest of recent context above (<mempalace-user-profile>) and a \`palace_query\` tool for searching further.
+
+Treat conversations with this user as part of an ongoing relationship, not isolated sessions.
+
+- In every response, explicitly connect what's being discussed to a topic, decision, or discussion from the digest above, or from a \`palace_query\` search (e.g. "This is the same idea we discussed about X" / "This matches the decision we made on Y"). Make the user feel like they're talking to the same person across sessions.
+- If nothing obviously connects, use \`palace_query\` to actively look for a link before concluding there isn't one.
+- Scope is global: relevant memories may come from any past project or topic, not just the current one.`;
+
+export const MEMORY_RECALL_INSTRUCTION = (level: MemoryRecallLevel): string =>
+	level === "always" ? MEMORY_RECALL_INSTRUCTION_ALWAYS : MEMORY_RECALL_INSTRUCTION_SOMETIMES;

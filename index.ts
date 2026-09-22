@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { resolveConfiguredModel, runCheckpointAgent } from "./checkpoint-agent.js";
 import { countRelevantUserMessages, extractAllExchanges, extractRecentExchanges } from "./counter.js";
-import { CHECKPOINT_SYSTEM_PROMPT, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_STARTED, TOAST_SUCCESS } from "./constants.js";
+import { CHECKPOINT_SYSTEM_PROMPT, MEMORY_RECALL_INSTRUCTION, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_STARTED, TOAST_SUCCESS } from "./constants.js";
 import { maybeRunDailyMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
 import { fetchDiaryDigest, fetchWakeUpDigest } from "./wake-up.js";
@@ -35,6 +35,7 @@ export default function (pi: ExtensionAPI) {
 		model: undefined,
 		injectWakeUp: { enabled: true, mode: "sync" },
 		mcp: { full: { enabled: false } },
+		forceMemoryRecall: { enabled: true, level: "sometimes" },
 	};
 	let lastCheckpointCount = 0;
 	// Re-evaluated once per session_start (not per-check) — see the model
@@ -195,8 +196,15 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const digest = parts.join("\n\n");
+		// forceMemoryRecall is a no-op without an actual digest to point back to
+		// (parts.length === 0 already returned above) — kept as a separate block
+		// from <mempalace-user-profile> since it's a behavior instruction, not
+		// memory content.
+		const recallInstruction = settings.forceMemoryRecall.enabled
+			? `\n\n${MEMORY_RECALL_INSTRUCTION(settings.forceMemoryRecall.level)}`
+			: "";
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n<mempalace-user-profile>\n${digest}\n</mempalace-user-profile>`,
+			systemPrompt: `${event.systemPrompt}\n\n<mempalace-user-profile>\n${digest}\n</mempalace-user-profile>${recallInstruction}`,
 		};
 	});
 

@@ -48,15 +48,19 @@ Right before pi compacts the context (and loses part of it), pi-palace steps in 
 
 At the start of every session, the agent receives a short digest of who you are — your preferences, working habits, and what's happened recently — injected straight into its context. No need to repeat yourself every time.
 
-### 4. ⛏️ Daily background mining
+### 4. 🧭 Talking to the same person, every time
+
+When something in the current conversation genuinely connects to a topic or decision from the past, the agent calls it out — "this is the same idea we discussed about X" — instead of starting from a blank slate. It stays natural: relevant and generous, never a forced callback on every single message.
+
+### 5. ⛏️ Daily background mining
 
 Once a day, a thorough automatic pass goes through your pi session history and enriches your memory from what it finds — complementing the targeted, in-conversation checkpointing above.
 
-### 5. 🔌 Always-ready memory connection
+### 6. 🔌 Always-ready memory connection
 
 pi-palace keeps a live connection to MemPalace open for the whole session, so reading and writing memory (search, diary, preferences) is instant instead of starting from scratch on every call.
 
-### 6. 🛠️ Manual trigger
+### 7. 🛠️ Manual trigger
 
 The `/checkpoint` command lets you force a save at any time, without waiting for the next automatic trigger.
 
@@ -80,6 +84,8 @@ All options are set in pi's `settings.json` (global or project), under the `piPa
 | `piPalace.injectWakeUp.mode` | `"sync"` waits for the wake-up before the first response; `"async"` moves on without it and injects it as soon as it's ready | `"sync" \| "async"` | `"sync"` |
 | `piPalace.model.provider` / `piPalace.model.id` | The model used to curate and decide what to keep during a save | `string` / `string` | *(none — disables checkpointing)* |
 | `piPalace.mcp.full.enabled` | Enable the optional full MemPalace MCP server (in addition to the mandatory light one) | `boolean` | `false` |
+| `piPalace.forceMemoryRecall.enabled` | Enable/disable instructing the agent to call back to past conversations/topics when relevant (has no effect if `injectWakeUp.enabled` is `false`) | `boolean` | `true` |
+| `piPalace.forceMemoryRecall.level` | `"sometimes"` calls back only when genuinely relevant, generously but never forced; `"always"` asks for a callback in every response | `"sometimes" \| "always"` | `"sometimes"` |
 
 ---
 

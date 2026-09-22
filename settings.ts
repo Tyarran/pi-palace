@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 export type CheckpointMode = "silent" | "blocking";
 export type InjectWakeUpMode = "sync" | "async";
+export type MemoryRecallLevel = "sometimes" | "always";
 
 export interface DailyMineSettings {
 	enabled: boolean;
@@ -37,6 +38,17 @@ export interface McpSettings {
 	full: { enabled: boolean };
 }
 
+export interface ForceMemoryRecallSettings {
+	enabled: boolean;
+	// "sometimes": the injected instruction asks the model to reference past
+	// topics/decisions only when genuinely relevant, generously but never
+	// forced. "always": asks for a callback in every single response,
+	// regardless of relevance — experimental, kept for evaluation. Has no
+	// effect if injectWakeUp.enabled is false, since there is then no digest
+	// for the instruction to point back to (see index.ts).
+	level: MemoryRecallLevel;
+}
+
 export interface AutosaveSettings {
 	interval: number;
 	mode: CheckpointMode;
@@ -59,6 +71,7 @@ export interface AutosaveSettings {
 	model: ModelSettings | undefined;
 	injectWakeUp: InjectWakeUpSettings;
 	mcp: McpSettings;
+	forceMemoryRecall: ForceMemoryRecallSettings;
 }
 
 const DEFAULTS: Omit<AutosaveSettings, "model"> = {
@@ -83,6 +96,13 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 	mcp: {
 		full: { enabled: false },
 	},
+	// Same low-risk rationale as injectWakeUp: read-only, best-effort, and
+	// silently a no-op when there's no digest to callback to. "sometimes" is
+	// the default level — generous but never forced (see the type above).
+	forceMemoryRecall: {
+		enabled: true,
+		level: "sometimes",
+	},
 };
 
 interface RawSettingsShape {
@@ -96,6 +116,7 @@ interface RawSettingsShape {
 		model: Partial<ModelSettings>;
 		injectWakeUp: Partial<InjectWakeUpSettings>;
 		mcp: Partial<{ full: Partial<{ enabled: boolean }> }>;
+		forceMemoryRecall: Partial<ForceMemoryRecallSettings>;
 	}>;
 }
 
@@ -169,5 +190,15 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		full: { enabled: rawMcpFull.enabled === true },
 	};
 
-	return { interval, mode, userWing, agentName, diaryWing, dailyMine, model, injectWakeUp, mcp };
+	const rawForceMemoryRecall = {
+		...DEFAULTS.forceMemoryRecall,
+		...globalRaw?.piPalace?.forceMemoryRecall,
+		...projectRaw?.piPalace?.forceMemoryRecall,
+	};
+	const forceMemoryRecall: ForceMemoryRecallSettings = {
+		enabled: rawForceMemoryRecall.enabled !== false, // default true unless explicitly disabled
+		level: rawForceMemoryRecall.level === "always" ? "always" : "sometimes",
+	};
+
+	return { interval, mode, userWing, agentName, diaryWing, dailyMine, model, injectWakeUp, mcp, forceMemoryRecall };
 }
