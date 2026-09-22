@@ -1,6 +1,6 @@
 import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { callMempalaceTool } from "./mcp-client.js";
+import type { McpManager } from "./mcp-manager.js";
 
 const drawerItemSchema = Type.Object({
 	wing: Type.String({ description: "Wing (project name, or the configured user wing for preferences)" }),
@@ -15,15 +15,15 @@ const diarySchema = Type.Object({
 });
 
 /**
- * Calls mempalace's mempalace_checkpoint MCP tool over a dedicated,
- * one-shot stdio MCP connection (spawns `mempalace-mcp`, does the
- * initialize handshake, makes the one tools/call, exits). This goes
- * through the real, supported MCP protocol path rather than importing
- * mempalace's internal Python modules directly, which proved fragile in
- * practice (readonly-database behavior and stdout/stderr redirection
- * specific to how the package expects to be run as a long-lived server).
+ * Calls MemPalace's checkpoint operation through the shared persistent
+ * light MCP connection (`palace_exec`, `action: "checkpoint"`) instead of
+ * spawning a dedicated one-shot `mempalace-mcp` process per call. Uses the
+ * light server specifically (mandatory baseline) rather than the full
+ * server's dedicated `mempalace_checkpoint` tool name, since light is
+ * always connected and exposes the same operation through its unified
+ * palace_exec entrypoint.
  */
-export function createMempalaceCheckpointTool() {
+export function createMempalaceCheckpointTool(mcpManager: McpManager) {
 	return defineTool({
 		name: "mempalace_checkpoint",
 		label: "MemPalace Checkpoint",
@@ -34,7 +34,7 @@ export function createMempalaceCheckpointTool() {
 			diary: Type.Optional(diarySchema),
 		}),
 		async execute(_toolCallId, params) {
-			const result = await callMempalaceTool("mempalace_checkpoint", params as Record<string, unknown>);
+			const result = await mcpManager.callLightTool("palace_exec", { action: "checkpoint", ...params });
 
 			const text = result.content?.map((c) => c.text ?? "").join("\n") ?? "";
 

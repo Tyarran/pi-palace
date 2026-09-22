@@ -18,6 +18,11 @@ export interface InjectUserProfileSettings {
 	enabled: boolean;
 }
 
+export interface McpSettings {
+	// light has no toggle — always connected, it's the mandatory baseline.
+	full: { enabled: boolean };
+}
+
 export interface AutosaveSettings {
 	interval: number;
 	mode: CheckpointMode;
@@ -27,6 +32,7 @@ export interface AutosaveSettings {
 	// (see index.ts) rather than silently falling back to a hardcoded model.
 	model: ModelSettings | undefined;
 	injectUserProfile: InjectUserProfileSettings;
+	mcp: McpSettings;
 }
 
 const DEFAULTS: Omit<AutosaveSettings, "model"> = {
@@ -42,6 +48,9 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 	injectUserProfile: {
 		enabled: true,
 	},
+	mcp: {
+		full: { enabled: false },
+	},
 };
 
 interface RawSettingsShape {
@@ -52,6 +61,7 @@ interface RawSettingsShape {
 		dailyMine: Partial<DailyMineSettings>;
 		model: Partial<ModelSettings>;
 		injectUserProfile: Partial<InjectUserProfileSettings>;
+		mcp: Partial<{ full: Partial<{ enabled: boolean }> }>;
 	}>;
 }
 
@@ -112,5 +122,14 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		enabled: rawInjectUserProfile.enabled !== false, // default true unless explicitly disabled
 	};
 
-	return { interval, mode, userWing, dailyMine, model, injectUserProfile };
+	const rawMcpFull = {
+		...DEFAULTS.mcp.full,
+		...globalRaw?.mempalaceAutosave?.mcp?.full,
+		...projectRaw?.mempalaceAutosave?.mcp?.full,
+	};
+	const mcp: McpSettings = {
+		full: { enabled: rawMcpFull.enabled === true },
+	};
+
+	return { interval, mode, userWing, dailyMine, model, injectUserProfile, mcp };
 }

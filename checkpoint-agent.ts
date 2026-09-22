@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { createMempalaceCheckpointTool } from "./checkpoint-tool.js";
+import type { McpManager } from "./mcp-manager.js";
 import type { ModelSettings } from "./settings.js";
 
 /**
@@ -26,10 +27,11 @@ export async function runCheckpointAgent(options: {
 	systemPrompt: string;
 	cwd: string;
 	model: Model<Api>;
+	mcpManager: McpManager;
 }): Promise<void> {
-	const { conversationExcerpt, systemPrompt, cwd, model } = options;
+	const { conversationExcerpt, systemPrompt, cwd, model, mcpManager } = options;
 
-	const checkpointTool = createMempalaceCheckpointTool();
+	const checkpointTool = createMempalaceCheckpointTool(mcpManager);
 
 	const agentDir = getAgentDir();
 	const resourceLoader = new DefaultResourceLoader({
