@@ -1,7 +1,6 @@
 import type { McpManager } from "./mcp-manager.js";
 import { getWakeUpContext } from "./wake-up-cli.js";
 
-const DIARY_AGENT_NAME = "pi";
 const DIARY_LAST_N = 5;
 
 /**
@@ -24,14 +23,14 @@ export async function fetchWakeUpDigest(userWing: string): Promise<string | null
  * has barely started by the time the fast wake-up fetch resolves) — an
  * accepted trade-off, not a bug.
  */
-export async function fetchDiaryDigest(mcpManager: McpManager): Promise<string | null> {
+export async function fetchDiaryDigest(mcpManager: McpManager, agentName: string): Promise<string | null> {
 	const diaryResult = await mcpManager
-		.callLightTool("palace_query", { target: "diary_read", agent_name: DIARY_AGENT_NAME, last_n: DIARY_LAST_N })
+		.callLightTool("palace_query", { target: "diary_read", agent_name: agentName, last_n: DIARY_LAST_N })
 		.catch(() => null);
 
 	const diaryText = diaryResult?.content
 		?.map((c) => c.text ?? "")
 		.join("\n")
 		.trim();
-	return diaryText ? `## Recent agent diary (last ${DIARY_LAST_N}, agent: ${DIARY_AGENT_NAME})\n${diaryText}` : null;
+	return diaryText ? `## Recent agent diary (last ${DIARY_LAST_N}, agent: ${agentName})\n${diaryText}` : null;
 }

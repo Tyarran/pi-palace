@@ -41,6 +41,18 @@ export interface AutosaveSettings {
 	interval: number;
 	mode: CheckpointMode;
 	userWing: string | undefined;
+	// Fixed identity used both when WRITING the diary entry (agent_name in
+	// checkpoint's diary payload) and when READING it back at wake-up
+	// (diary_read's agent_name filter). Keeping both sides locked to the same
+	// configured value (rather than leaving agent_name to the checkpoint
+	// sub-agent's own judgment) guarantees wake-up never silently misses
+	// entries due to a naming drift. Has a real default ("pi") — unlike
+	// userWing/model, there's no useful "disabled" state for this one.
+	agentName: string;
+	// Dedicated wing for the checkpoint's diary entry, separate from userWing
+	// (profile only) and from the cwd-derived project wing (items). Has a
+	// real default ("diaries") so diary filing works out of the box.
+	diaryWing: string;
 	dailyMine: DailyMineSettings;
 	// No default on purpose: absence means checkpoint features are disabled
 	// (see index.ts) rather than silently falling back to a hardcoded model.
@@ -53,6 +65,8 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 	interval: 15,
 	mode: "silent",
 	userWing: undefined,
+	agentName: "pi",
+	diaryWing: "diaries",
 	dailyMine: {
 		enabled: false,
 		wing: "pi",
@@ -76,6 +90,8 @@ interface RawSettingsShape {
 		interval: number;
 		mode: CheckpointMode;
 		userWing: string;
+		agentName: string;
+		diaryWing: string;
 		dailyMine: Partial<DailyMineSettings>;
 		model: Partial<ModelSettings>;
 		injectWakeUp: Partial<InjectWakeUpSettings>;
@@ -114,6 +130,8 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 	const interval = Number.isFinite(merged.interval) && merged.interval > 0 ? Math.floor(merged.interval) : DEFAULTS.interval;
 	const mode: CheckpointMode = merged.mode === "blocking" ? "blocking" : "silent";
 	const userWing = typeof merged.userWing === "string" && merged.userWing.trim() ? merged.userWing.trim() : undefined;
+	const agentName = typeof merged.agentName === "string" && merged.agentName.trim() ? merged.agentName.trim() : DEFAULTS.agentName;
+	const diaryWing = typeof merged.diaryWing === "string" && merged.diaryWing.trim() ? merged.diaryWing.trim() : DEFAULTS.diaryWing;
 
 	const rawDailyMine = {
 		...DEFAULTS.dailyMine,
@@ -151,5 +169,5 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		full: { enabled: rawMcpFull.enabled === true },
 	};
 
-	return { interval, mode, userWing, dailyMine, model, injectWakeUp, mcp };
+	return { interval, mode, userWing, agentName, diaryWing, dailyMine, model, injectWakeUp, mcp };
 }

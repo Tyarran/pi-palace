@@ -3,7 +3,7 @@ import { basename } from "node:path";
 export const TOAST_SUCCESS = "MemPalace checkpoint sauvegardé ✅";
 export const TOAST_ERROR = "MemPalace checkpoint échoué ❌";
 
-export const CHECKPOINT_SYSTEM_PROMPT = (userWing: string, cwd: string) => `You are a memory-filing agent for MemPalace, an AI memory system.
+export const CHECKPOINT_SYSTEM_PROMPT = (userWing: string, cwd: string, diaryWing: string, agentName: string) => `You are a memory-filing agent for MemPalace, an AI memory system.
 
 ## Working directory (ground truth)
 
@@ -43,6 +43,8 @@ For user preferences/habits specifically (separate from project content):
 ## Diary
 
 Write one diary entry in AAAK format (compressed, dense, single line summarizing the exchange, entities/projects involved, importance ★ to ★★★★★).
+File it with \`agent_name\`: "${agentName}" — ALWAYS this exact value, never anything else (the startup wake-up looks up diary entries by this exact agent_name; using a different value would make this entry invisible to it).
+File it with \`wing\`: "${diaryWing}" — the dedicated diary wing, separate from both the project wing and "${userWing}".
 
 ## Rules
 
@@ -52,7 +54,7 @@ Write one diary entry in AAAK format (compressed, dense, single line summarizing
 - If there is truly nothing memorable, call it with an empty items array and no diary
 `;
 
-export const PRECOMPACT_SYSTEM_PROMPT = (userWing: string, cwd: string) => `${CHECKPOINT_SYSTEM_PROMPT(userWing, cwd)}
+export const PRECOMPACT_SYSTEM_PROMPT = (userWing: string, cwd: string, diaryWing: string, agentName: string) => `${CHECKPOINT_SYSTEM_PROMPT(userWing, cwd, diaryWing, agentName)}
 
 ## URGENT: context is about to be compacted
 

@@ -29,6 +29,8 @@ export default function (pi: ExtensionAPI) {
 		interval: 15,
 		mode: "silent",
 		userWing: undefined,
+		agentName: "pi",
+		diaryWing: "diaries",
 		dailyMine: { enabled: false, wing: "pi", limit: 100 },
 		model: undefined,
 		injectWakeUp: { enabled: true, mode: "sync" },
@@ -108,7 +110,7 @@ export default function (pi: ExtensionAPI) {
 			.then((manager) => {
 				mcpManager = manager;
 				if (injectEnabled && wing) {
-					fetchDiaryDigest(manager)
+					fetchDiaryDigest(manager, settings.agentName)
 						.then((d) => {
 							diaryDigest = d;
 						})
@@ -208,7 +210,7 @@ export default function (pi: ExtensionAPI) {
 		lastCheckpointCount = currentCount;
 
 		const excerpt = extractRecentExchanges(ctx.sessionManager.getBranch(), settings.interval);
-		await triggerCheckpoint(ctx, settings, mcpManager, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd));
+		await triggerCheckpoint(ctx, settings, mcpManager, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
@@ -220,7 +222,7 @@ export default function (pi: ExtensionAPI) {
 
 		// Fire-and-forget (or blocking per settings), but never cancel the
 		// compaction itself — silent-by-default behavior, acted on in the plan.
-		await triggerCheckpoint(ctx, settings, mcpManager, excerpt, PRECOMPACT_SYSTEM_PROMPT(settings.userWing, ctx.cwd));
+		await triggerCheckpoint(ctx, settings, mcpManager, excerpt, PRECOMPACT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
 	});
 
 	pi.registerCommand("checkpoint", {
@@ -242,7 +244,7 @@ export default function (pi: ExtensionAPI) {
 			// agent_end hook, just invoked on demand instead of by the counter.
 			const currentCount = countRelevantUserMessages(ctx);
 			const excerpt = extractRecentExchanges(ctx.sessionManager.getBranch(), settings.interval);
-			await triggerCheckpoint(ctx, settings, mcpManager, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd));
+			await triggerCheckpoint(ctx, settings, mcpManager, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
 
 			// Resync the interval counter so the next automatic trigger doesn't
 			// fire again immediately right after this manual one.

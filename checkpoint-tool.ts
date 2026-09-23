@@ -12,6 +12,7 @@ const diarySchema = Type.Object({
 	agent_name: Type.String({ description: "Name of the filing agent" }),
 	entry: Type.String({ description: "Diary entry, AAAK format" }),
 	topic: Type.Optional(Type.String()),
+	wing: Type.Optional(Type.String({ description: "Wing to file the diary entry in (the configured diary wing, separate from item wings)" })),
 });
 
 /**
