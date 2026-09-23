@@ -83,6 +83,22 @@ All options are set in pi's `settings.json` (global or project), under the `piPa
 
 ---
 
+## 🧪 Development
+
+```bash
+# Clone and setup
+git clone https://github.com/<org>/pi-palace
+cd pi-palace
+bun install
+
+# Run tests
+bun test
+```
+
+> No `build`/`lint` script exists yet — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the current dev workflow (edit → `pi reload` → manual verification under real conditions).
+
+---
+
 ## 📝 Recent changes
 
 - **Diary routed to its own wing**: the checkpoint's diary entry now files into `piPalace.diaryWing` (default `"diaries"`) instead of sharing a wing with anything else, and is written under a fixed `piPalace.agentName` (default `"pi"`) — locking write and read (startup wake-up) to the same identity so the wake-up digest never silently misses an entry due to a naming drift.

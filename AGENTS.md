@@ -40,6 +40,14 @@ All files live at the repo root, in TypeScript, with no `src/` directory:
 - **Emergency save**: on `session_before_compact`, a more aggressive checkpoint (`PRECOMPACT_SYSTEM_PROMPT`) fires in silent mode to avoid losing anything before compaction.
 - All configuration goes through the `piPalace` namespace in `settings.json` (global or project). See the full table in `README.md`.
 
+## 🧪 Tests
+
+- Test runner: **`bun test`** (bun installed/pinned via `mise` — see `mise.toml`).
+- Run the full suite: `bun test` (or `npm test`, which proxies to `bun test`).
+- No `build`/`lint` script exists yet — only `test` is wired up in `package.json`.
+- Test files sit next to the module they cover, named `*.test.ts` (e.g. `counter.test.ts`).
+- If `bun` isn't on the `PATH`, install it via `mise install` (the project pins it in `mise.toml`).
+
 ## 🤝 Contributing
 
 For code conventions, the development workflow, commit message rules (Conventional Commits), and points of caution, see **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
