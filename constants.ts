@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 
+export const TOAST_STARTED = "MemPalace checkpoint en cours...";
 export const TOAST_SUCCESS = "MemPalace checkpoint sauvegardé ✅";
 export const TOAST_ERROR = "MemPalace checkpoint échoué ❌";
 

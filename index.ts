@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { resolveConfiguredModel, runCheckpointAgent } from "./checkpoint-agent.js";
 import { countRelevantUserMessages, extractAllExchanges, extractRecentExchanges } from "./counter.js";
-import { CHECKPOINT_SYSTEM_PROMPT, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_SUCCESS } from "./constants.js";
+import { CHECKPOINT_SYSTEM_PROMPT, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_STARTED, TOAST_SUCCESS } from "./constants.js";
 import { maybeRunDailyMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
 import { fetchDiaryDigest, fetchWakeUpDigest } from "./wake-up.js";
@@ -261,6 +261,10 @@ async function triggerCheckpoint(
 	systemPrompt: string,
 ): Promise<void> {
 	const run = async () => {
+		// Fired in both modes ("silent" and "blocking") — in "silent" mode this
+		// is the only visible sign a checkpoint is even happening, since the
+		// hook returns immediately afterwards without waiting for it.
+		safeNotify(ctx, TOAST_STARTED, "info");
 		try {
 			const model = resolveConfiguredModel(ctx, settings.model);
 			if (!model) {
