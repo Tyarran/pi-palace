@@ -1,6 +1,6 @@
 import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import type { McpManager } from "./mcp-manager.js";
+import { submitMcpToolJob } from "./daemon-client.js";
 
 const drawerItemSchema = Type.Object({
 	wing: Type.String({ description: "Wing (project name, or the configured user wing for preferences)" }),
@@ -16,15 +16,28 @@ const diarySchema = Type.Object({
 });
 
 /**
- * Calls MemPalace's checkpoint operation through the shared persistent
- * light MCP connection (`palace_exec`, `action: "checkpoint"`) instead of
- * spawning a dedicated one-shot `mempalace-mcp` process per call. Uses the
- * light server specifically (mandatory baseline) rather than the full
- * server's dedicated `mempalace_checkpoint` tool name, since light is
- * always connected and exposes the same operation through its unified
- * palace_exec entrypoint.
+ * Submits MemPalace's checkpoint operation as a daemon job (`kind:
+ * "mcp_tool"`, `name: "mempalace_checkpoint"`) instead of calling it
+ * directly through the shared persistent light MCP connection.
+ *
+ * The light MCP server (one per pi session) tries to acquire the palace's
+ * single-writer flock itself when asked to run a mutating tool. If another
+ * process already holds it — typically the daemon mid-mine, which can run
+ * for a long time — the call used to fail immediately with "Peer MCP
+ * writer active", silently dropping the checkpoint (autosave defaults to
+ * "silent" mode, so nothing surfaced the failure). Going through
+ * `submitMcpToolJob` instead durably queues the checkpoint on the daemon's
+ * own job queue — the same serialization point already used for daily
+ * mining — so it runs once the daemon is free, no matter how many
+ * pi/opencode sessions are open concurrently.
+ *
+ * Trade-off: submission is fire-and-forget (`wait: false`), so this tool
+ * can only report "queued", not "filed successfully" — the real dedup/file/
+ * diary result is no longer available synchronously to the calling
+ * sub-agent. See daemon-client.ts's submitMcpToolJob doc comment for why
+ * that trade-off was chosen over blocking.
  */
-export function createMempalaceCheckpointTool(mcpManager: McpManager) {
+export function createMempalaceCheckpointTool() {
 	return defineTool({
 		name: "mempalace_checkpoint",
 		label: "MemPalace Checkpoint",
@@ -35,34 +48,15 @@ export function createMempalaceCheckpointTool(mcpManager: McpManager) {
 			diary: Type.Optional(diarySchema),
 		}),
 		async execute(_toolCallId, params) {
-			const result = await mcpManager.callLightTool("palace_exec", { action: "checkpoint", ...params });
+			const result = await submitMcpToolJob("mempalace_checkpoint", params);
 
-			const text = result.content?.map((c) => c.text ?? "").join("\n") ?? "";
-
-			if (result.isError) {
-				throw new Error(`mempalace_checkpoint failed: ${text || "unknown error"}`);
-			}
-
-			// The MCP tool result text is the JSON-serialized {added, duplicates,
-			// errors, diary} payload. Parse it to also catch the "200 OK shape,
-			// but errors[] non-empty" failure mode (e.g. palace write lock held
-			// by another process) that isError alone would miss.
-			let parsed: { errors?: unknown[]; diary?: { success?: boolean; error?: string } } = {};
-			try {
-				parsed = JSON.parse(text);
-			} catch {
-				// Non-JSON text content is still a valid success shape for some
-				// tools; only treat it as fatal if we can't proceed at all.
-			}
-			const itemErrors = Array.isArray(parsed.errors) ? parsed.errors : [];
-			const diaryFailed = parsed.diary?.success === false;
-			if (itemErrors.length > 0 || diaryFailed) {
-				throw new Error(`mempalace_checkpoint reported failures: ${JSON.stringify({ itemErrors, diaryError: parsed.diary?.error })}`);
+			if (!result.success) {
+				throw new Error(`mempalace_checkpoint submission failed: ${result.error || "unknown error"}`);
 			}
 
 			return {
-				content: [{ type: "text" as const, text: text || "Checkpoint saved." }],
-				details: parsed as Record<string, unknown>,
+				content: [{ type: "text" as const, text: `Checkpoint queued (job ${result.jobId ?? "?"}, state: ${result.state ?? "queued"}).` }],
+				details: result as Record<string, unknown>,
 			};
 		},
 	});

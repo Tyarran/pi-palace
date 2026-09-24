@@ -51,3 +51,5 @@ All files live at the repo root, in TypeScript, with no `src/` directory:
 ## 🤝 Contributing
 
 For code conventions, the development workflow, commit message rules (Conventional Commits), and points of caution, see **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
+
+> ⚠️ Commit messages: Conventional Commits, **single line only, no multi-line body** (`<type>: <description>`). Do not add a body/footer even to explain rationale — see [CONTRIBUTING.md § Commit messages](./CONTRIBUTING.md#-commit-messages).

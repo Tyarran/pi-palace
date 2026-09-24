@@ -40,6 +40,8 @@ Each checkpoint routes what it finds to up to three separate wings:
 - **Project items** (decisions, technical notes, problems) → automatically derived from the current working directory's basename
 - **Diary entry** → `piPalace.diaryWing`, filed under a fixed `piPalace.agentName` identity so the startup wake-up (which looks up diary entries by that same identity, regardless of which wing they're stored in) always finds it
 
+Under the hood, the save itself isn't executed directly through the session's own MCP connection: it's submitted as a job to the MemPalace daemon's queue and runs once the daemon is free. This avoids checkpoints silently failing when another process (typically the daily mining pass) is already holding the palace's single-writer lock.
+
 ### 2. 🚨 Emergency save before compaction
 
 Right before pi compacts the context (and loses part of it), pi-palace steps in to save what was about to disappear. One last chance to not lose anything.
@@ -107,6 +109,7 @@ bun test
 
 ## 📝 Recent changes
 
+- **Checkpoint saves routed through the daemon's job queue**: `/checkpoint` and automatic saves no longer call MemPalace's light MCP server directly for the write — they submit a fire-and-forget `mcp_tool` job to the MemPalace daemon instead. The light MCP server tries to grab the palace's single-writer lock itself, which used to fail immediately ("Peer MCP writer active", silently dropped in `"silent"` mode) whenever the daemon was mid-mine. Going through the daemon's own queue means the checkpoint durably waits its turn instead of being lost. Trade-off: the tool now reports "queued" instead of the synchronous added/duplicates/errors/diary result.
 - **Diary routed to its own wing**: the checkpoint's diary entry now files into `piPalace.diaryWing` (default `"diaries"`) instead of sharing a wing with anything else, and is written under a fixed `piPalace.agentName` (default `"pi"`) — locking write and read (startup wake-up) to the same identity so the wake-up digest never silently misses an entry due to a naming drift.
 
 ## 🙏 Credits

@@ -281,7 +281,7 @@ async function triggerCheckpoint(
 				// resolvable at session_start and became unresolvable since.
 				throw new Error("configured checkpoint model not available");
 			}
-			await runCheckpointAgent({ conversationExcerpt: excerpt, systemPrompt, cwd: ctx.cwd, model, mcpManager });
+			await runCheckpointAgent({ conversationExcerpt: excerpt, systemPrompt, cwd: ctx.cwd, model });
 			safeNotify(ctx, TOAST_SUCCESS, "info");
 		} catch (err) {
 			safeNotify(ctx, TOAST_ERROR, "error");

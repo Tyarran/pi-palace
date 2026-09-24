@@ -59,6 +59,13 @@ export interface DaemonMineResult {
 	error?: string;
 }
 
+export interface SubmitMcpToolJobResult {
+	success: boolean;
+	jobId?: string;
+	state?: string;
+	error?: string;
+}
+
 async function runMempalaceCli(args: string[], timeoutMs = 15_000): Promise<{ code: number; stdout: string; stderr: string }> {
 	try {
 		const { stdout, stderr } = await execFileAsync("mempalace", args, { timeout: timeoutMs });
@@ -134,6 +141,65 @@ export async function submitDailyMineJob(sessionsDir: string, wing: string, limi
 		const lastLine = lines[lines.length - 1];
 		const parsed = JSON.parse(lastLine ?? "{}");
 		return { success: Boolean(parsed.success), error: parsed.error };
+	} catch (err) {
+		const e = err as { stdout?: string; stderr?: string; message?: string };
+		return { success: false, error: e.stderr || e.message || "unknown error" };
+	}
+}
+
+/**
+ * Submits an arbitrary write-classified MCP tool call as a daemon job
+ * (`kind: "mcp_tool"`), instead of executing it directly against a
+ * per-session `mempalace-light-mcp` process.
+ *
+ * Why this exists: the light MCP server each pi session opens tries to
+ * acquire the palace's single-writer flock itself. When another process
+ * already holds it (typically the daemon, mid-mine — a mine can run for a
+ * long time), every OTHER session's mutating call (e.g. `/checkpoint`)
+ * fails immediately with "Peer MCP writer active" instead of waiting its
+ * turn — silently dropping the checkpoint (autosave runs in "silent" mode
+ * by default). Routing through the daemon's job queue instead means the
+ * call is durably queued and executed once the daemon is free, regardless
+ * of how many pi/opencode sessions are open concurrently or how long a
+ * mine is running.
+ *
+ * Deliberately `wait: false` (fire-and-forget submission, mirroring
+ * submitDailyMineJob): a caller wanting a blocking checkpoint would stall
+ * behind an arbitrarily long mine, which is worse than not knowing the
+ * exact completion time. No `dedupe_key` is passed — unlike the daily mine
+ * (one fixed key, intentionally collapsing duplicate daily runs), each
+ * checkpoint call carries different content and must never be coalesced
+ * with another one.
+ */
+export async function submitMcpToolJob(name: string, args: Record<string, unknown>): Promise<SubmitMcpToolJobResult> {
+	const script = [
+		"import json, sys",
+		"from mempalace.daemon import submit_job, DaemonError",
+		"payload = json.loads(sys.argv[1])",
+		"try:",
+		"    result = submit_job(",
+		"        'mcp_tool',",
+		"        {'name': payload['name'], 'arguments': payload['arguments']},",
+		"        wait=False,",
+		"        auto_start=True,",
+		"    )",
+		// wait=False returns the freshly-created job dict immediately (state
+		// 'queued' or 'running'), not the tool's actual result — submission
+		// itself succeeding is what we treat as success here.
+		"    print(json.dumps({'success': True, 'job_id': result.get('id'), 'state': result.get('state')}))",
+		"except DaemonError as exc:",
+		"    print(json.dumps({'success': False, 'error': str(exc)}))",
+	].join("\n");
+
+	const payload = JSON.stringify({ name, arguments: args });
+
+	try {
+		const python = await resolveMempalacePython();
+		const { stdout } = await execFileAsync(python, ["-c", script, payload], { maxBuffer: 16 * 1024 * 1024, timeout: 30_000 });
+		const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+		const lastLine = lines[lines.length - 1];
+		const parsed = JSON.parse(lastLine ?? "{}");
+		return { success: Boolean(parsed.success), jobId: parsed.job_id, state: parsed.state, error: parsed.error };
 	} catch (err) {
 		const e = err as { stdout?: string; stderr?: string; message?: string };
 		return { success: false, error: e.stderr || e.message || "unknown error" };
