@@ -2,6 +2,10 @@
 
 Thanks for contributing! 🙌 This document describes the rules to follow when proposing changes to this repository.
 
+## 🌐 Project language
+
+- **English is the project's sole language** — code, comments, commit messages, README/AGENTS/CONTRIBUTING, and **any GitHub issue or PR** (title and body). Do not write project-facing content in another language, even if the conversation driving it happened in one.
+
 ## 🎨 Code conventions
 
 - **Strict TypeScript**, functional style (functions + exported interfaces) — no classes in the existing modules.

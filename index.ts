@@ -218,7 +218,7 @@ export default function (pi: ExtensionAPI) {
 		lastCheckpointCount = currentCount;
 
 		const excerpt = extractRecentExchanges(ctx.sessionManager.getBranch(), settings.interval);
-		await triggerCheckpoint(ctx, settings, mcpManager, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
+		await triggerCheckpoint(ctx, settings, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
@@ -230,7 +230,7 @@ export default function (pi: ExtensionAPI) {
 
 		// Fire-and-forget (or blocking per settings), but never cancel the
 		// compaction itself — silent-by-default behavior, acted on in the plan.
-		await triggerCheckpoint(ctx, settings, mcpManager, excerpt, PRECOMPACT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
+		await triggerCheckpoint(ctx, settings, excerpt, PRECOMPACT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
 	});
 
 	pi.registerCommand("checkpoint", {
@@ -252,7 +252,7 @@ export default function (pi: ExtensionAPI) {
 			// agent_end hook, just invoked on demand instead of by the counter.
 			const currentCount = countRelevantUserMessages(ctx);
 			const excerpt = extractRecentExchanges(ctx.sessionManager.getBranch(), settings.interval);
-			await triggerCheckpoint(ctx, settings, mcpManager, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
+			await triggerCheckpoint(ctx, settings, excerpt, CHECKPOINT_SYSTEM_PROMPT(settings.userWing, ctx.cwd, settings.diaryWing, settings.agentName));
 
 			// Resync the interval counter so the next automatic trigger doesn't
 			// fire again immediately right after this manual one.
@@ -264,7 +264,6 @@ export default function (pi: ExtensionAPI) {
 async function triggerCheckpoint(
 	ctx: Pick<ExtensionContext, "hasUI" | "ui" | "cwd" | "modelRegistry">,
 	settings: AutosaveSettings,
-	mcpManager: McpManager,
 	excerpt: string,
 	systemPrompt: string,
 ): Promise<void> {
