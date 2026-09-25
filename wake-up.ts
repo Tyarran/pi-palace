@@ -25,6 +25,11 @@ export function resolveWakeUpWing(settings: Pick<AutosaveSettings, "userWing" | 
 			return settings.injectWakeUp.wing ?? settings.userWing ?? null;
 		case null:
 			return null;
+		default:
+			// Exhaustive by the InjectWakeUpSource type, but settings.ts reads this
+			// from untyped JSON — a malformed/future config value must degrade to
+			// "no wing" rather than silently falling through with no return.
+			return null;
 	}
 }
 

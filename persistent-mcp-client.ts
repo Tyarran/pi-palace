@@ -25,7 +25,10 @@ export interface McpToolSchema {
 }
 
 export interface McpToolCallResult {
-	content?: Array<{ type: string; text?: string }>;
+	// Narrowed to the literal "text" (MCP's text content block type) rather
+	// than a bare `string` — needed for this to structurally satisfy pi's own
+	// TextContent type at the pi.registerTool() call sites in mcp-manager.ts.
+	content?: Array<{ type: "text"; text?: string }>;
 	isError?: boolean;
 }
 

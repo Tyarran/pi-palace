@@ -17,7 +17,7 @@ Thanks for contributing! 🙌 This document describes the rules to follow when p
 
 ## 🛠️ Development workflow
 
-- Test suite via `bun test` (see [AGENTS.md](./AGENTS.md#-tests) and the README's [Development](./README.md#-development) section). No `build`/`lint` script in `package.json` as of today — verify before assuming one exists.
+- Test suite via `bun test` (see [AGENTS.md](./AGENTS.md#-tests) and the README's [Development](./README.md#-development) section). A `typecheck` script (`tsc --noEmit`, config in `tsconfig.json`) is available — run it after non-trivial changes; `@mariozechner/pi-*`/`typebox`/`@types/*` are `devDependencies` for this alone, not runtime dependencies (pi provides them at runtime). No `build`/`lint` script in `package.json` as of today — verify before assuming one exists.
 - Usual dev cycle: edit code → `pi reload` (reload the extension) → test under real conditions in a pi session (`/checkpoint`, `STATUS`, `DIARY <agent> LAST N`) to confirm content is filed in the right wing / under the right identity.
 - Pragmatic debugging approach: add temporary `console.log`/`console.error`, review, then clean up before committing.
 - This repo uses **Jujutsu (jj)**, not just git — check `jj log`/`jj status` in addition to `git` when relevant.

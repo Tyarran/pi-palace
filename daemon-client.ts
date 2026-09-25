@@ -66,6 +66,88 @@ export interface SubmitMcpToolJobResult {
 	error?: string;
 }
 
+/**
+ * Outcome of a blocking (`wait:true`, `stop_on_lock_deferral:true`) daemon job
+ * submission — see `submitMcpToolJobWaiting`. A discriminated union instead
+ * of a single result shape so callers are forced to handle the "deferred by
+ * the palace write lock" case explicitly rather than mistaking it for either
+ * a normal success or a normal failure.
+ */
+export type DaemonJobOutcome =
+	| { kind: "succeeded"; result: Record<string, unknown> }
+	| { kind: "lockedByMine" }
+	| { kind: "failed"; error: string };
+
+/**
+ * Raw shape of a job dict as returned by the daemon HTTP API / `submit_job`
+ * (see `daemon.py`'s `job_to_dict` and `job_deferred_by_lock`) — the subset
+ * this client actually reads.
+ */
+export interface RawDaemonJob {
+	state?: string;
+	result?: Record<string, unknown> | null;
+	error?: { error_class?: string; message?: string } | null;
+}
+
+/**
+ * Classifies a raw daemon job dict into a `DaemonJobOutcome`, mirroring
+ * `daemon.py`'s own `job_deferred_by_lock` logic: a job is "deferred by the
+ * palace write lock" (not failed, not succeeded) when it's back in `queued`
+ * state with `error.error_class === "LockHeldByOtherProcess"` — the state
+ * `client.wait(..., stop_on_lock_deferral=True)` returns early with instead
+ * of blocking through the whole duration of whatever else is holding the
+ * lock (typically a mine). Pulled out as a pure function so the mapping is
+ * unit-testable without spawning python/the daemon.
+ */
+export function classifyDaemonJobOutcome(job: RawDaemonJob): DaemonJobOutcome {
+	if (job.state === "queued" && job.error?.error_class === "LockHeldByOtherProcess") {
+		return { kind: "lockedByMine" };
+	}
+	if (job.state === "succeeded") {
+		return { kind: "succeeded", result: job.result ?? {} };
+	}
+	return { kind: "failed", error: job.error?.message ?? "job failed" };
+}
+
+/**
+ * Point 6 — known MemPalace/daemon failure signatures, classified from a
+ * raw error message so callers (currently `triggerCheckpoint` in index.ts)
+ * can show an actionable toast instead of a generic one. Pattern-matched
+ * against whatever string ends up in the error (JSON-RPC error message from
+ * `persistent-mcp-client.ts`, a `DaemonError` string, or `classifyDaemonJobOutcome`'s
+ * own `failed`/`lockedByMine` messages) — there is no structured error code
+ * threaded all the way through every path, so this is deliberately a
+ * best-effort string match, not an exhaustive parser.
+ */
+export type MempalaceErrorKind = "staleLibrary" | "indexCorrupt" | "lockedByMine" | "daemonUnavailable" | "unknown";
+
+const ERROR_PATTERNS: Array<{ kind: MempalaceErrorKind; pattern: RegExp }> = [
+	// -32005: a write tool refused because the MCP server's loaded library no
+	// longer matches what's installed on disk (see mempalace_status's
+	// library_versions.stale) — fixed by restarting the MCP server, not by
+	// retrying the call.
+	{ kind: "staleLibrary", pattern: /-32005|action_required.*restart_mcp_server|stale librar(y|ies)/i },
+	// HNSW segment-writer / ChromaDB compaction errors, or a server that stays
+	// "Not connected" after a write — the vector index is out of sync with
+	// chroma.sqlite3; fixed with `mempalace repair --mode from-sqlite`, never
+	// by re-mining (drops MCP-added drawers/diary entries).
+	{ kind: "indexCorrupt", pattern: /HNSW|segment[- ]writer|compaction|not connected/i },
+	// The palace write lock is held by another process (typically a mine) —
+	// covers both classifyDaemonJobOutcome's lockedByMine wording and the
+	// older direct-MCP "Peer MCP writer active" message this routing mostly
+	// eliminated (see mcp-manager.ts) but which can still surface from paths
+	// not yet migrated.
+	{ kind: "lockedByMine", pattern: /LockHeldByOtherProcess|palace write lock held|Peer MCP writer active/i },
+	{ kind: "daemonUnavailable", pattern: /daemon is not running|daemon did not become ready|ECONNREFUSED/i },
+];
+
+export function classifyMempalaceError(message: string): MempalaceErrorKind {
+	for (const { kind, pattern } of ERROR_PATTERNS) {
+		if (pattern.test(message)) return kind;
+	}
+	return "unknown";
+}
+
 async function runMempalaceCli(args: string[], timeoutMs = 15_000): Promise<{ code: number; stdout: string; stderr: string }> {
 	try {
 		const { stdout, stderr } = await execFileAsync("mempalace", args, { timeout: timeoutMs });
@@ -203,5 +285,72 @@ export async function submitMcpToolJob(name: string, args: Record<string, unknow
 	} catch (err) {
 		const e = err as { stdout?: string; stderr?: string; message?: string };
 		return { success: false, error: e.stderr || e.message || "unknown error" };
+	}
+}
+
+/**
+ * Submits a write-classified MCP tool call to the daemon's job queue like
+ * `submitMcpToolJob`, but BLOCKS for the real result instead of fire-and-
+ * forgetting a "queued" acknowledgement.
+ *
+ * Callers that need this (the generic write-tool routing in
+ * `mcp-manager.ts`, the audit/repair session, the checkpoint sub-agent's
+ * knowledge-graph tools) have to know whether the write actually happened —
+ * e.g. an interactive repair step needs to confirm a tunnel was really
+ * deleted before asking the next question, and a KG fact write feeding back
+ * into the same conversation needs its real outcome, not just a job id.
+ *
+ * Uses the daemon's own `wait=True, stop_on_lock_deferral=True` (see
+ * `daemon.py`'s `DaemonClient.wait`): if the palace write lock is currently
+ * held by another process (typically a mine), the call does NOT block for
+ * the lock holder's entire duration — it returns as soon as the job comes
+ * back deferred (`state: 'queued'`, `error.error_class:
+ * 'LockHeldByOtherProcess'`), classified here as `{ kind: 'lockedByMine' }`
+ * via `classifyDaemonJobOutcome`. Callers should surface that as "a mine is
+ * currently running, try again later" rather than treating it as a normal
+ * failure or retrying it themselves (the daemon already re-queues it on its
+ * own backoff).
+ *
+ * Deliberately NOT used by `submitDailyMineJob` or the checkpoint autosave
+ * path (`checkpoint-tool.ts`) — both keep the existing fire-and-forget
+ * `submitMcpToolJob`/`wait:false` behavior on purpose, since neither wants
+ * to stall a session turn behind an arbitrarily long job.
+ */
+export async function submitMcpToolJobWaiting(name: string, args: Record<string, unknown>): Promise<DaemonJobOutcome> {
+	const script = [
+		"import json, sys",
+		"from mempalace.daemon import submit_job, DaemonError",
+		"payload = json.loads(sys.argv[1])",
+		"try:",
+		"    job = submit_job(",
+		"        'mcp_tool',",
+		"        {'name': payload['name'], 'arguments': payload['arguments']},",
+		"        wait=True,",
+		"        stop_on_lock_deferral=True,",
+		"        auto_start=True,",
+		"    )",
+		// The full job dict (state/result/error) — classifyDaemonJobOutcome reads
+		// it directly, mirroring daemon.py's own job_deferred_by_lock check.
+		"    print(json.dumps({'state': job.get('state'), 'result': job.get('result'), 'error': job.get('error')}))",
+		"except DaemonError as exc:",
+		"    print(json.dumps({'state': 'failed', 'result': None, 'error': {'message': str(exc)}}))",
+	].join("\n");
+
+	const payload = JSON.stringify({ name, arguments: args });
+
+	try {
+		const python = await resolveMempalacePython();
+		// Generous timeout: unlike submitMcpToolJob (submission-only), this call
+		// can legitimately wait for the tool's own execution time — bounded by
+		// stop_on_lock_deferral against the one open-ended case (a concurrent
+		// mine holding the lock).
+		const { stdout } = await execFileAsync(python, ["-c", script, payload], { maxBuffer: 16 * 1024 * 1024, timeout: 120_000 });
+		const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+		const lastLine = lines[lines.length - 1];
+		const job = JSON.parse(lastLine ?? "{}") as RawDaemonJob;
+		return classifyDaemonJobOutcome(job);
+	} catch (err) {
+		const e = err as { stdout?: string; stderr?: string; message?: string };
+		return { kind: "failed", error: e.stderr || e.message || "unknown error" };
 	}
 }

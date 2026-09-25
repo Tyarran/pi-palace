@@ -44,7 +44,7 @@ All files live at the repo root, in TypeScript, with no `src/` directory:
 
 - Test runner: **`bun test`** (bun installed/pinned via `mise` — see `mise.toml`).
 - Run the full suite: `bun test` (or `npm test`, which proxies to `bun test`).
-- No `build`/`lint` script exists yet — only `test` is wired up in `package.json`.
+- `test` and `typecheck` (`tsc --noEmit`) are wired up in `package.json`; no `build`/`lint` script exists yet. `devDependencies` (`@mariozechner/pi-*`, `typebox`, `@types/*`) exist solely to make `typecheck` possible locally — pi provides these at runtime, they are not runtime dependencies of this package.
 - Test files sit next to the module they cover, named `*.test.ts` (e.g. `counter.test.ts`).
 - If `bun` isn't on the `PATH`, install it via `mise install` (the project pins it in `mise.toml`).
 

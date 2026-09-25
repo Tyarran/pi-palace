@@ -1,7 +1,12 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { createMempalaceCheckpointTool } from "./checkpoint-tool.js";
+import {
+	createMempalaceCheckpointTool,
+	createMempalaceKgAddTool,
+	createMempalaceKgInvalidateTool,
+	createMempalaceKgSupersedeTool,
+} from "./checkpoint-tool.js";
 import type { ModelSettings } from "./settings.js";
 
 /**
@@ -30,6 +35,10 @@ export async function runCheckpointAgent(options: {
 	const { conversationExcerpt, systemPrompt, cwd, model } = options;
 
 	const checkpointTool = createMempalaceCheckpointTool();
+	// Point 2 — knowledge-graph tools, in addition to the checkpoint tool. The
+	// sub-agent's system prompt (CHECKPOINT_SYSTEM_PROMPT) decides case by case
+	// whether something is a drawer or a KG fact; no hardcoded rule here.
+	const kgTools = [createMempalaceKgAddTool(), createMempalaceKgSupersedeTool(), createMempalaceKgInvalidateTool()];
 
 	const agentDir = getAgentDir();
 	const resourceLoader = new DefaultResourceLoader({
@@ -53,7 +62,7 @@ export async function runCheckpointAgent(options: {
 		sessionManager: SessionManager.inMemory(),
 		resourceLoader,
 		noTools: "builtin", // disable read/bash/edit/write, keep customTools active
-		customTools: [checkpointTool],
+		customTools: [checkpointTool, ...kgTools],
 	});
 
 	try {

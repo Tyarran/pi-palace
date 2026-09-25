@@ -4,7 +4,15 @@
   "description": "Automatic MemPalace memory integration for pi — curated checkpoints, daily exhaustive mining, centralized MCP connection, and startup wake-up injection.",
   "keywords": ["pi-package"],
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.73.1",
+    "@mariozechner/pi-coding-agent": "^0.73.1",
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.6.2",
+    "typebox": "^1.3.34"
   },
   "pi": {
     "extensions": ["./index.ts"]

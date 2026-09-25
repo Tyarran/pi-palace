@@ -40,7 +40,9 @@ Each checkpoint routes what it finds to up to three separate wings:
 - **Project items** (decisions, technical notes, problems) → automatically derived from the current working directory's basename
 - **Diary entry** → `piPalace.diaryWing`, filed under a fixed `piPalace.agentName` identity so the startup wake-up (which looks up diary entries by that same identity, regardless of which wing they're stored in) always finds it
 
-Under the hood, the save itself isn't executed directly through the session's own MCP connection: it's submitted as a job to the MemPalace daemon's queue and runs once the daemon is free. This avoids checkpoints silently failing when another process (typically the daily mining pass) is already holding the palace's single-writer lock.
+Beyond drawers, the checkpoint sub-agent also has access to MemPalace's knowledge-graph tools (`mempalace_kg_add`, `mempalace_kg_supersede`, `mempalace_kg_invalidate`) and decides, case by case, whether something is better filed as a free-form drawer or as a clean subject/predicate/object fact worth tracking over time (a tool/model/library in use, an employer, a status — for both user preferences and project facts). A single-valued fact that changes (e.g. switched database) is superseded atomically instead of accumulating as competing drawers.
+
+Under the hood, the save itself isn't executed directly through the session's own MCP connection: it's submitted as a job to the MemPalace daemon's queue and runs once the daemon is free. This avoids checkpoints silently failing when another process (typically the daily mining pass) is already holding the palace's single-writer lock. A failed checkpoint now surfaces an actionable toast instead of a generic one — it's classified (stale MCP server library, corrupted vector index, a mine currently holding the lock, or an unreachable daemon) and points at the specific fix.
 
 ### 2. 🚨 Emergency save before compaction
 
@@ -52,7 +54,7 @@ At the start of every session, the agent receives a short digest of who you are 
 
 ### 4. 🧭 Talking to the same person, every time
 
-When something in the current conversation genuinely connects to a topic or decision from the past, the agent calls it out — "this is the same idea we discussed about X" — instead of starting from a blank slate. It stays natural: relevant and generous, never a forced callback on every single message.
+A search-before-answer recall protocol — reinjected every turn, not just the first — tells the agent to actively search the palace (`mempalace_search`, `mempalace_kg_query`) before answering questions about past work, people, or decisions, instead of guessing from model memory or relying solely on the startup digest. When something in the current conversation genuinely connects to a topic or decision from the past, the agent calls it out — "this is the same idea we discussed about X" — instead of starting from a blank slate. It stays natural: relevant and generous, never a forced callback on every single message. Whatever it retrieves from the palace is always quoted **verbatim**, never summarized or paraphrased — a dedicated instruction enforces this independently of the recall protocol itself.
 
 ### 5. ⛏️ Daily background mining
 
@@ -65,6 +67,14 @@ pi-palace keeps a live connection to MemPalace open for the whole session, so re
 ### 7. 🛠️ Manual trigger
 
 The `/checkpoint` command lets you force a save at any time, without waiting for the next automatic trigger.
+
+### 8. 🧹 Palace audit & repair
+
+The `/palace-audit` command runs a read-only `mempalace audit`, walks you through an interactive repair session — one question at a time, recommended option first, nothing done without confirmation (merging duplicate wings/rooms, cleaning up generic tunnels/hallways, agreeing a consistent knowledge-graph vocabulary, structuring flat wings into rooms) — then a `mempalace_sync` pass (dry-run first) to prune drawers whose source files are gone, and closes out with a before/after score diary entry. Requires `piPalace.mcp.full.enabled` (the repair step needs the full server's tunnel/hallway/sync tools). Manual trigger only, never runs in the background.
+
+### 9. 🔒 Every write goes through the daemon
+
+Every `mempalace_*` write tool available in a session — not just checkpoints — is routed through the MemPalace daemon's job queue instead of the session's own MCP connection, and waits for the real result (bounded: it does not block through an entire concurrent mine, only until the palace write lock's refusal is observed). Read-only tools (search, status, KG queries, navigation, …) still call straight through for speed. This closes a gap where any mutating tool call made directly by the agent — not just the dedicated checkpoint path — could fail outright with "Peer MCP writer active" whenever the daemon was mid-mine.
 
 ---
 
@@ -142,14 +152,20 @@ bun install
 
 # Run tests
 bun test
+
+# Type-check (devDependencies only — @mariozechner/pi-coding-agent etc. are
+# provided at runtime by pi itself, not a runtime dependency of this package)
+bun run typecheck
 ```
 
-> No `build`/`lint` script exists yet — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the current dev workflow (edit → `pi reload` → manual verification under real conditions).
+> No `lint` script exists yet — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the current dev workflow (edit → `pi reload` → manual verification under real conditions).
 
 ---
 
 ## 📝 Recent changes
 
+- **Recall improvements**: the memory-callback instruction was rewritten into a search-before-answer protocol (adapted from MemPalace's own `mempalace-recall` skill) and is now reinjected on every turn instead of only the first message, so it stays in force for the whole session. A dedicated verbatim-discipline instruction was added alongside it. The checkpoint sub-agent can now also write knowledge-graph facts (`mempalace_kg_add`/`kg_supersede`/`kg_invalidate`) in addition to drawers. A new `/palace-audit` command runs MemPalace's audit + interactive repair + sync flow. Checkpoint failures now show an actionable, classified toast instead of a generic one.
+- **Every write tool now daemon-routed**: previously only `/checkpoint` avoided the session's direct MCP connection for writes; every `mempalace_*` write tool exposed to the agent now goes through the same daemon job queue (blocking for the real result this time, bounded against a concurrent mine via the daemon's own lock-deferral signal) — read-only tools are unaffected.
 - **Configurable wake-up wing (`injectWakeUp.source`)**: the startup wake-up used to be hardcoded to `piPalace.userWing`. It's now configurable via `piPalace.injectWakeUp.source` (`"user"` / `"project"` / `"custom"` + `injectWakeUp.wing` / `null`), defaulting to `"user"` for full backward compatibility.
 - **Checkpoint saves routed through the daemon's job queue**: `/checkpoint` and automatic saves no longer call MemPalace's light MCP server directly for the write — they submit a fire-and-forget `mcp_tool` job to the MemPalace daemon instead. The light MCP server tries to grab the palace's single-writer lock itself, which used to fail immediately ("Peer MCP writer active", silently dropped in `"silent"` mode) whenever the daemon was mid-mine. Going through the daemon's own queue means the checkpoint durably waits its turn instead of being lost. Trade-off: the tool now reports "queued" instead of the synchronous added/duplicates/errors/diary result.
 - **Diary routed to its own wing**: the checkpoint's diary entry now files into `piPalace.diaryWing` (default `"diaries"`) instead of sharing a wing with anything else, and is written under a fixed `piPalace.agentName` (default `"pi"`) — locking write and read (startup wake-up) to the same identity so the wake-up digest never silently misses an entry due to a naming drift.

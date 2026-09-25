@@ -1,7 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { resolveConfiguredModel, runCheckpointAgent } from "./checkpoint-agent.js";
 import { countRelevantUserMessages, extractAllExchanges, extractRecentExchanges } from "./counter.js";
-import { CHECKPOINT_SYSTEM_PROMPT, MEMORY_RECALL_INSTRUCTION, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_STARTED, TOAST_SUCCESS } from "./constants.js";
+import {
+	CHECKPOINT_SYSTEM_PROMPT,
+	MEMORY_RECALL_INSTRUCTION,
+	PALACE_AUDIT_PROTOCOL,
+	PRECOMPACT_SYSTEM_PROMPT,
+	TOAST_ERROR_FOR,
+	TOAST_STARTED,
+	TOAST_SUCCESS,
+	VERBATIM_DISCIPLINE_INSTRUCTION,
+} from "./constants.js";
+import { classifyMempalaceError } from "./daemon-client.js";
 import { maybeRunDailyMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
 import { fetchDiaryDigest, fetchWakeUpDigest, resolveWakeUpWing } from "./wake-up.js";
@@ -24,6 +34,23 @@ function safeNotify(ctx: Pick<ExtensionContext, "hasUI" | "ui">, message: string
 	}
 }
 
+/**
+ * Gated debug logger — see CONTRIBUTING.md's "Temporary debug logs" note:
+ * tolerated when gated behind a verbosity-control env var, which this
+ * centralizes into a single call site instead of a scattered
+ * `if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error(...)` per site.
+ */
+function debugLog(...parts: unknown[]): void {
+	if (!process.env.MEMPALACE_AUTOSAVE_DEBUG) return;
+	const log = console.error;
+	try {
+		log("[pi-palace]", ...parts);
+	} catch {
+		// best-effort debug logging only — a formatting/console failure must
+		// never crash the session over a log line.
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	let settings: AutosaveSettings = {
 		interval: 15,
@@ -41,10 +68,14 @@ export default function (pi: ExtensionAPI) {
 	// Re-evaluated once per session_start (not per-check) — see the model
 	// resolution below. Defaults to disabled until session_start has run.
 	let checkpointDisabled = true;
-	// Guards before_agent_start, which fires on EVERY prompt, not just the
-	// first — wake-up injection must only be attempted (i.e. actually
-	// applied) once per session.
-	let profileInjected = false;
+	// Guards ONLY the wake-up digest fetch (point 1/5 changed this: the
+	// recall protocol + verbatim discipline blocks are now reinjected on
+	// EVERY turn instead, see before_agent_start below — a session-wide
+	// behavior instruction has to stay in force past the first message to
+	// be meaningful). This flag still ensures the "sync" mode's blocking
+	// wake-up fetch (~2-3s) is only attempted once per session, not on every
+	// turn.
+	let wakeUpFetchAttempted = false;
 	// undefined = fetch still in flight or not started (async mode only, see
 	// below), null = fetch failed, string = ready. Only populated in "async"
 	// mode — in "sync" mode wake-up is fetched directly inside
@@ -95,7 +126,7 @@ export default function (pi: ExtensionAPI) {
 
 		mcpManager?.close();
 		mcpManager = null;
-		profileInjected = false;
+		wakeUpFetchAttempted = false;
 		wakeUpDigest = undefined;
 		diaryDigest = undefined;
 
@@ -128,7 +159,7 @@ export default function (pi: ExtensionAPI) {
 			})
 			.catch((err) => {
 				safeNotify(ctx, "pi-palace: MCP connection failed ❌", "error");
-				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] MCP init error:", err);
+				debugLog("MCP init error:", err);
 				diaryDigest = null;
 			});
 
@@ -158,61 +189,69 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!settings.injectWakeUp.enabled || profileInjected) {
+		if (!settings.injectWakeUp.enabled) {
 			return;
 		}
 
 		let wakeUpPart: string | null;
 		if (settings.injectWakeUp.mode === "sync") {
-			// Blocks THIS turn (i.e. the response) for the wake-up fetch alone
-			// (~2-3s) — the whole point of "sync" mode: guarantee the first
-			// response is personalized, at the cost of that latency. resolvedWing
-			// may be null (source: null, or a degraded "user"/"custom") — the CLI
-			// is then called without --wing, which is a valid attempt, not a skip.
-			wakeUpPart = await fetchWakeUpDigest(resolvedWing).catch(() => null);
-		} else {
-			if (wakeUpDigest === undefined) {
-				// Not ready yet — skip this turn without blocking, try again next
-				// turn (profileInjected stays false until an actual attempt lands).
-				return;
+			if (wakeUpFetchAttempted) {
+				// Already fetched (or attempted) once this session — "sync" mode
+				// only pays its blocking latency on the first turn. Later turns
+				// reuse whatever the first attempt produced (cached below), even
+				// if it was null (failure isn't retried mid-session).
+				wakeUpPart = wakeUpDigest ?? null;
+			} else {
+				// Blocks THIS turn (i.e. the response) for the wake-up fetch alone
+				// (~2-3s) — the whole point of "sync" mode: guarantee the first
+				// response is personalized, at the cost of that latency. resolvedWing
+				// may be null (source: null, or a degraded "user"/"custom") — the CLI
+				// is then called without --wing, which is a valid attempt, not a skip.
+				wakeUpFetchAttempted = true;
+				wakeUpPart = await fetchWakeUpDigest(resolvedWing).catch(() => null);
+				wakeUpDigest = wakeUpPart; // cache for later turns, mirroring "async" mode's own cache
 			}
-			wakeUpPart = wakeUpDigest;
+		} else {
+			// "async" mode: wakeUpDigest is populated fire-and-forget from
+			// session_start (see below) — undefined means "not ready yet", not
+			// "never will be", so later turns keep picking up whatever landed.
+			wakeUpPart = wakeUpDigest ?? null;
 		}
-
-		profileInjected = true; // one applied attempt per session, success or failure
 
 		// diary_read: take whatever is available RIGHT NOW, never wait for it
 		// (see wake-up.ts) — in "sync" mode this is almost always still
-		// undefined/missing, since the MCP connection has barely started by
-		// the time the fast wake-up fetch resolves. Accepted trade-off.
+		// undefined/missing on the FIRST turn, since the MCP connection has
+		// barely started by the time the fast wake-up fetch resolves, but
+		// reliably present by later turns since this hook now re-reads it
+		// every time instead of only once.
 		const parts = [wakeUpPart, diaryDigest].filter((p): p is string => Boolean(p));
 
-		if (process.env.MEMPALACE_AUTOSAVE_DEBUG) {
-			console.error(
-				"[pi-palace] DEBUG wake-up injection: mode=",
-				settings.injectWakeUp.mode,
-				"wakeUpPart=",
-				wakeUpPart ? `${wakeUpPart.length} chars` : "missing",
-				"diaryDigest=",
-				diaryDigest ? `${diaryDigest.length} chars` : "missing",
-			);
-		}
+		debugLog(
+			"DEBUG wake-up injection: mode=",
+			settings.injectWakeUp.mode,
+			"wakeUpPart=",
+			wakeUpPart ? `${wakeUpPart.length} chars` : "missing",
+			"diaryDigest=",
+			diaryDigest ? `${diaryDigest.length} chars` : "missing",
+		);
 
-		if (parts.length === 0) {
-			if (ctx.hasUI) ctx.ui.notify("pi-palace: wake-up injection unavailable ⚠️", "warning");
+		// forceMemoryRecall (protocol) and the verbatim discipline block are
+		// behavior instructions, not memory content — reinjected every turn
+		// regardless of whether an actual digest is available this time, so
+		// the search-before-answer protocol stays in force for the whole
+		// session (see MEMORY_RECALL_INSTRUCTION's doc comment in constants.ts).
+		const recallInstruction = settings.forceMemoryRecall.enabled
+			? `\n\n${MEMORY_RECALL_INSTRUCTION(settings.forceMemoryRecall.level)}\n\n${VERBATIM_DISCIPLINE_INSTRUCTION}`
+			: "";
+
+		if (parts.length === 0 && !recallInstruction) {
+			if (ctx.hasUI && !wakeUpFetchAttempted) ctx.ui.notify("pi-palace: wake-up injection unavailable ⚠️", "warning");
 			return;
 		}
 
-		const digest = parts.join("\n\n");
-		// forceMemoryRecall is a no-op without an actual digest to point back to
-		// (parts.length === 0 already returned above) — kept as a separate block
-		// from <mempalace-user-profile> since it's a behavior instruction, not
-		// memory content.
-		const recallInstruction = settings.forceMemoryRecall.enabled
-			? `\n\n${MEMORY_RECALL_INSTRUCTION(settings.forceMemoryRecall.level)}`
-			: "";
+		const digestBlock = parts.length > 0 ? `\n\n<mempalace-user-profile>\n${parts.join("\n\n")}\n</mempalace-user-profile>` : "";
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n<mempalace-user-profile>\n${digest}\n</mempalace-user-profile>${recallInstruction}`,
+			systemPrompt: `${event.systemPrompt}${digestBlock}${recallInstruction}`,
 		};
 	});
 
@@ -267,6 +306,29 @@ export default function (pi: ExtensionAPI) {
 			lastCheckpointCount = currentCount;
 		},
 	});
+
+	// Points 3+4 — audit + interactive repair + sync, run inline in the MAIN
+	// session (not an isolated sub-agent like /checkpoint) so the agent has
+	// bash (for `mempalace audit`/`mempalace rooms propose|apply`) AND every
+	// registered mempalace_* tool available, all write tools now daemon-routed
+	// via mcp-manager.ts. Manual trigger only — no background automation.
+	pi.registerCommand("palace-audit", {
+		description: "Run a MemPalace palace health audit, then an interactive repair + sync session",
+		handler: async (_args, ctx) => {
+			if (!mcpManager) {
+				ctx.ui.notify("pi-palace: MCP unavailable — cannot run a palace audit", "warning");
+				return;
+			}
+			if (!settings.mcp.full.enabled) {
+				ctx.ui.notify(
+					'pi-palace: the full MemPalace MCP server is disabled (piPalace.mcp.full.enabled) — the repair step needs its tunnel/hallway/sync tools, enable it first',
+					"warning",
+				);
+				return;
+			}
+			pi.sendUserMessage(PALACE_AUDIT_PROTOCOL);
+		},
+	});
 }
 
 async function triggerCheckpoint(
@@ -291,7 +353,8 @@ async function triggerCheckpoint(
 			await runCheckpointAgent({ conversationExcerpt: excerpt, systemPrompt, cwd: ctx.cwd, model });
 			safeNotify(ctx, TOAST_SUCCESS, "info");
 		} catch (err) {
-			safeNotify(ctx, TOAST_ERROR, "error");
+			const message = err instanceof Error ? err.message : String(err);
+			safeNotify(ctx, TOAST_ERROR_FOR(classifyMempalaceError(message)), "error");
 			if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] error:", err);
 		}
 	};
