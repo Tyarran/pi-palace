@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 export type CheckpointMode = "silent" | "blocking";
 export type InjectWakeUpMode = "sync" | "async";
+export type InjectWakeUpSource = "user" | "project" | "custom" | null;
 export type MemoryRecallLevel = "sometimes" | "always";
 
 export interface DailyMineSettings {
@@ -31,6 +32,16 @@ export interface InjectWakeUpSettings {
 	// in "sync" mode it will most often be missing from the injected digest
 	// (the MCP connection has barely started by the time wake-up resolves).
 	mode: InjectWakeUpMode;
+	// Which wing the wake-up CLI fetch ("mempalace wake-up") is scoped to.
+	// "user": piPalace.userWing (default, backward-compatible) — degrades to
+	// null (CLI called without --wing) if userWing isn't set. "project":
+	// the cwd-derived project wing (same basename(cwd) convention as the
+	// checkpoint's project items). "custom": the `wing` field below —
+	// degrades to "user" behavior if `wing` isn't set. null: call the CLI
+	// without --wing at all (its own default scope, whatever that is).
+	source: InjectWakeUpSource;
+	// Only used when source === "custom".
+	wing?: string;
 }
 
 export interface McpSettings {
@@ -92,6 +103,7 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 	injectWakeUp: {
 		enabled: true,
 		mode: "sync",
+		source: "user",
 	},
 	mcp: {
 		full: { enabled: false },
@@ -114,7 +126,7 @@ interface RawSettingsShape {
 		diaryWing: string;
 		dailyMine: Partial<DailyMineSettings>;
 		model: Partial<ModelSettings>;
-		injectWakeUp: Partial<InjectWakeUpSettings>;
+		injectWakeUp: Partial<InjectWakeUpSettings> & { source?: InjectWakeUpSource };
 		mcp: Partial<{ full: Partial<{ enabled: boolean }> }>;
 		forceMemoryRecall: Partial<ForceMemoryRecallSettings>;
 	}>;
@@ -176,9 +188,20 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		...globalRaw?.piPalace?.injectWakeUp,
 		...projectRaw?.piPalace?.injectWakeUp,
 	};
+	// `source` accepts an explicit `null` (a valid, distinct value meaning
+	// "no wing at all") — only fall back to the "user" default when the key
+	// is truly absent or set to something unrecognized, never collapse an
+	// explicit null into the default via `??`.
+	const hasSource = Object.prototype.hasOwnProperty.call(rawInjectWakeUp, "source");
+	const rawSource = rawInjectWakeUp.source;
+	const source: InjectWakeUpSource =
+		!hasSource || (rawSource !== "user" && rawSource !== "project" && rawSource !== "custom" && rawSource !== null) ? DEFAULTS.injectWakeUp.source : rawSource;
+	const wing = typeof rawInjectWakeUp.wing === "string" && rawInjectWakeUp.wing.trim() ? rawInjectWakeUp.wing.trim() : undefined;
 	const injectWakeUp: InjectWakeUpSettings = {
 		enabled: rawInjectWakeUp.enabled !== false, // default true unless explicitly disabled
 		mode: rawInjectWakeUp.mode === "async" ? "async" : "sync",
+		source,
+		wing,
 	};
 
 	const rawMcpFull = {

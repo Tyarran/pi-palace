@@ -13,6 +13,7 @@ Thanks for contributing! 🙌 This document describes the rules to follow when p
 - Large system prompts are generator functions (`(args) => \`template\``) in `constants.ts`, not separate `.md` files.
 - Temporary debug logs (`console.error`) are tolerated but should be gated behind a verbosity-control environment variable if the pattern becomes widespread (e.g. `DEBUG_MEMPALACE_AUTOSAVE`).
 - UI notifications always go through a defensive function like `safeNotify` (the callback may run after the synchronous turn that triggered it has ended).
+- **Every feature must ship with unit tests** — new behavior (a new module, a new branch of logic, a new config option) is not considered complete without a corresponding `*.test.ts` covering it (see [AGENTS.md](./AGENTS.md#-tests) for the test file convention).
 
 ## 🛠️ Development workflow
 

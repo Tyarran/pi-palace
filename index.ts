@@ -4,7 +4,7 @@ import { countRelevantUserMessages, extractAllExchanges, extractRecentExchanges 
 import { CHECKPOINT_SYSTEM_PROMPT, MEMORY_RECALL_INSTRUCTION, PRECOMPACT_SYSTEM_PROMPT, TOAST_ERROR, TOAST_STARTED, TOAST_SUCCESS } from "./constants.js";
 import { maybeRunDailyMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
-import { fetchDiaryDigest, fetchWakeUpDigest } from "./wake-up.js";
+import { fetchDiaryDigest, fetchWakeUpDigest, resolveWakeUpWing } from "./wake-up.js";
 import { type AutosaveSettings, loadAutosaveSettings } from "./settings.js";
 
 /**
@@ -33,7 +33,7 @@ export default function (pi: ExtensionAPI) {
 		diaryWing: "diaries",
 		dailyMine: { enabled: false, wing: "pi", limit: 100 },
 		model: undefined,
-		injectWakeUp: { enabled: true, mode: "sync" },
+		injectWakeUp: { enabled: true, mode: "sync", source: "user" },
 		mcp: { full: { enabled: false } },
 		forceMemoryRecall: { enabled: true, level: "sometimes" },
 	};
@@ -53,6 +53,10 @@ export default function (pi: ExtensionAPI) {
 	// ALWAYS fire-and-forget regardless of injectWakeUp.mode — diary_read is
 	// never awaited by before_agent_start, in either mode (see wake-up.ts).
 	let diaryDigest: string | null | undefined;
+	// The wing (possibly null — a legitimate "call the CLI without --wing"
+	// state, see resolveWakeUpWing) the wake-up fetch is scoped to for this
+	// session, resolved once in session_start from injectWakeUp.source.
+	let resolvedWing: string | null = null;
 	// The persistent MCP connections (light mandatory, full opt-in), shared
 	// by the main session's registered tools AND the checkpoint sub-agent /
 	// profile digest — see mcp-manager.ts for why this replaced the old
@@ -95,7 +99,7 @@ export default function (pi: ExtensionAPI) {
 		wakeUpDigest = undefined;
 		diaryDigest = undefined;
 
-		const wing = settings.userWing;
+		resolvedWing = resolveWakeUpWing(settings, ctx.cwd);
 		const injectEnabled = settings.injectWakeUp.enabled;
 
 		// Fire-and-forget — connecting to the MCP servers and registering their
@@ -110,7 +114,9 @@ export default function (pi: ExtensionAPI) {
 		initMcpManager(pi, settings)
 			.then((manager) => {
 				mcpManager = manager;
-				if (injectEnabled && wing) {
+				// diary_read is keyed on agentName, not on any wing — independent of
+				// injectWakeUp.source/resolvedWing.
+				if (injectEnabled) {
 					fetchDiaryDigest(manager, settings.agentName)
 						.then((d) => {
 							diaryDigest = d;
@@ -129,8 +135,8 @@ export default function (pi: ExtensionAPI) {
 		// wake-up is only pre-fetched fire-and-forget in "async" mode. In "sync"
 		// mode it's fetched directly inside before_agent_start instead, so the
 		// first response actually waits for it.
-		if (injectEnabled && wing && settings.injectWakeUp.mode === "async") {
-			fetchWakeUpDigest(wing)
+		if (injectEnabled && settings.injectWakeUp.mode === "async") {
+			fetchWakeUpDigest(resolvedWing)
 				.then((d) => {
 					wakeUpDigest = d;
 				})
@@ -152,7 +158,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!settings.injectWakeUp.enabled || profileInjected || !settings.userWing) {
+		if (!settings.injectWakeUp.enabled || profileInjected) {
 			return;
 		}
 
@@ -160,8 +166,10 @@ export default function (pi: ExtensionAPI) {
 		if (settings.injectWakeUp.mode === "sync") {
 			// Blocks THIS turn (i.e. the response) for the wake-up fetch alone
 			// (~2-3s) — the whole point of "sync" mode: guarantee the first
-			// response is personalized, at the cost of that latency.
-			wakeUpPart = await fetchWakeUpDigest(settings.userWing).catch(() => null);
+			// response is personalized, at the cost of that latency. resolvedWing
+			// may be null (source: null, or a degraded "user"/"custom") — the CLI
+			// is then called without --wing, which is a valid attempt, not a skip.
+			wakeUpPart = await fetchWakeUpDigest(resolvedWing).catch(() => null);
 		} else {
 			if (wakeUpDigest === undefined) {
 				// Not ready yet — skip this turn without blocking, try again next

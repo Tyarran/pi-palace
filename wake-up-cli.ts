@@ -9,9 +9,10 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export async function getWakeUpContext(wing: string): Promise<string | null> {
+export async function getWakeUpContext(wing?: string | null): Promise<string | null> {
 	try {
-		const { stdout } = await execFileAsync("mempalace", ["wake-up", "--wing", wing], { timeout: 15_000 });
+		const args = wing ? ["wake-up", "--wing", wing] : ["wake-up"];
+		const { stdout } = await execFileAsync("mempalace", args, { timeout: 15_000 });
 		const text = stdout.trim();
 		return text || null;
 	} catch {

@@ -1,16 +1,42 @@
+import { basename } from "node:path";
 import type { McpManager } from "./mcp-manager.js";
+import type { AutosaveSettings } from "./settings.js";
 import { getWakeUpContext } from "./wake-up-cli.js";
 
 const DIARY_LAST_N = 5;
 
 /**
+ * Resolves which wing (if any) the wake-up CLI fetch should be scoped to,
+ * based on `injectWakeUp.source`:
+ * - "user": settings.userWing, degrading to null (no --wing) if unset.
+ * - "project": the cwd-derived project wing (same basename(cwd) convention
+ *   as the checkpoint's project items, see constants.ts).
+ * - "custom": settings.injectWakeUp.wing, degrading to the "user" behavior
+ *   above if unset.
+ * - null: no wing at all — the CLI is called without --wing.
+ */
+export function resolveWakeUpWing(settings: Pick<AutosaveSettings, "userWing" | "injectWakeUp">, cwd: string): string | null {
+	switch (settings.injectWakeUp.source) {
+		case "user":
+			return settings.userWing ?? null;
+		case "project":
+			return basename(cwd);
+		case "custom":
+			return settings.injectWakeUp.wing ?? settings.userWing ?? null;
+		case null:
+			return null;
+	}
+}
+
+/**
  * The guaranteed, fast part of the startup digest — CLI-based `mempalace
  * wake-up`, ~2-3s. Split out from diary fetching specifically so callers
  * can await this alone in "sync" mode without also waiting on the MCP
- * connection (see fetchDiaryDigest).
+ * connection (see fetchDiaryDigest). `wing` may be null (see
+ * resolveWakeUpWing) — the CLI is then called without --wing.
  */
-export async function fetchWakeUpDigest(userWing: string): Promise<string | null> {
-	const wakeUp = await getWakeUpContext(userWing);
+export async function fetchWakeUpDigest(wing: string | null): Promise<string | null> {
+	const wakeUp = await getWakeUpContext(wing);
 	return wakeUp ? `## MemPalace wake-up\n${wakeUp}` : null;
 }
 

@@ -84,10 +84,51 @@ All options are set in pi's `settings.json` (global or project), under the `piPa
 | `piPalace.dailyMine.limit` | Max files processed per daily mining run (`0` = unlimited) | `number` | `100` |
 | `piPalace.injectWakeUp.enabled` | Enable/disable the personalized wake-up on startup | `boolean` | `true` |
 | `piPalace.injectWakeUp.mode` | `"sync"` waits for the wake-up before the first response; `"async"` moves on without it and injects it as soon as it's ready | `"sync" \| "async"` | `"sync"` |
+| `piPalace.injectWakeUp.source` | Which wing the wake-up CLI fetch is scoped to: `"user"` uses `piPalace.userWing` (degrades to no wing at all if unset), `"project"` uses the cwd-derived project wing, `"custom"` uses `piPalace.injectWakeUp.wing` (degrades to `"user"` behavior if unset), `null` calls `mempalace wake-up` without any `--wing` at all | `"user" \| "project" \| "custom" \| null` | `"user"` |
+| `piPalace.injectWakeUp.wing` | The explicit wing name used when `injectWakeUp.source` is `"custom"` | `string` | *(none)* |
 | `piPalace.model.provider` / `piPalace.model.id` | The model used to curate and decide what to keep during a save | `string` / `string` | *(none — disables checkpointing)* |
 | `piPalace.mcp.full.enabled` | Enable the optional full MemPalace MCP server (in addition to the mandatory light one) | `boolean` | `false` |
 | `piPalace.forceMemoryRecall.enabled` | Enable/disable instructing the agent to call back to past conversations/topics when relevant (has no effect if `injectWakeUp.enabled` is `false`) | `boolean` | `true` |
 | `piPalace.forceMemoryRecall.level` | `"sometimes"` calls back only when genuinely relevant, generously but never forced; `"always"` asks for a callback in every response | `"sometimes" \| "always"` | `"sometimes"` |
+
+---
+
+## 🧩 Example configuration
+
+A full `piPalace` block showing every option at its default value:
+
+```json
+{
+  "piPalace": {
+    "interval": 15,
+    "mode": "silent",
+    "userWing": null,
+    "agentName": "pi",
+    "diaryWing": "diaries",
+    "dailyMine": {
+      "enabled": false,
+      "wing": "pi",
+      "limit": 100
+    },
+    "model": null,
+    "injectWakeUp": {
+      "enabled": true,
+      "mode": "sync",
+      "source": "user",
+      "wing": null
+    },
+    "mcp": {
+      "full": { "enabled": false }
+    },
+    "forceMemoryRecall": {
+      "enabled": true,
+      "level": "sometimes"
+    }
+  }
+}
+```
+
+> `userWing` and `model` have no real default (checkpointing/preference filing stay disabled until set); shown as `null` here only to make every key visible. `injectWakeUp.wing` is only read when `injectWakeUp.source` is `"custom"`.
 
 ---
 
@@ -109,6 +150,7 @@ bun test
 
 ## 📝 Recent changes
 
+- **Configurable wake-up wing (`injectWakeUp.source`)**: the startup wake-up used to be hardcoded to `piPalace.userWing`. It's now configurable via `piPalace.injectWakeUp.source` (`"user"` / `"project"` / `"custom"` + `injectWakeUp.wing` / `null`), defaulting to `"user"` for full backward compatibility.
 - **Checkpoint saves routed through the daemon's job queue**: `/checkpoint` and automatic saves no longer call MemPalace's light MCP server directly for the write — they submit a fire-and-forget `mcp_tool` job to the MemPalace daemon instead. The light MCP server tries to grab the palace's single-writer lock itself, which used to fail immediately ("Peer MCP writer active", silently dropped in `"silent"` mode) whenever the daemon was mid-mine. Going through the daemon's own queue means the checkpoint durably waits its turn instead of being lost. Trade-off: the tool now reports "queued" instead of the synchronous added/duplicates/errors/diary result.
 - **Diary routed to its own wing**: the checkpoint's diary entry now files into `piPalace.diaryWing` (default `"diaries"`) instead of sharing a wing with anything else, and is written under a fixed `piPalace.agentName` (default `"pi"`) — locking write and read (startup wake-up) to the same identity so the wake-up digest never silently misses an entry due to a naming drift.
 
