@@ -24,6 +24,15 @@ import type { AutosaveSettings } from "./settings.js";
  * neither needs the write lock.
  */
 const READ_ONLY_TOOLS = new Set([
+	// Unified mempalace-light query tool — always read-only regardless of
+	// what it's asked to fetch (memories/taxonomy/KG/tunnels/diary/status),
+	// unlike palace_coordinate below which mixes read and write actions in
+	// one tool name and needs per-call inspection instead (see
+	// `isReadOnlyCoordinateCall`). palace_exec (mempalace-light's write
+	// counterpart) is deliberately NOT listed here — every action it exposes
+	// mutates the palace, so it correctly falls through to the daemon-routed
+	// fail-safe default.
+	"palace_query",
 	// Palace reads
 	"mempalace_status",
 	"mempalace_list_wings",
@@ -64,6 +73,51 @@ export function isReadOnlyTool(name: string): boolean {
 	return READ_ONLY_TOOLS.has(name);
 }
 
+/**
+ * `palace_coordinate` (mempalace-light) is a single tool name covering both
+ * read actions (event_list, event_wait, inbox, mesh_peers, artifact_get)
+ * and write actions (task_create, event_append, event_ack, artifact_put,
+ * patch_submit) — unlike every other tool here, a flat name-based Set can't
+ * classify it. Callers pass either a structured `action` field or a DSL
+ * `command` string (e.g. "EVENT LIST stream:...", "TASK CREATE ...") — see
+ * `palace_coordinate`'s own tool description for the full DSL grammar.
+ *
+ * Fail-safe mirrors `isReadOnlyTool`: if the action/command can't be
+ * recognized (missing, malformed, or a future action this list doesn't
+ * know about yet), this returns false so the call goes through the
+ * daemon-routed write path rather than risking a direct write racing the
+ * palace's single-writer lock.
+ */
+const COORDINATE_READ_ACTIONS = new Set(["event_list", "event_wait", "mesh_peers", "artifact_get", "inbox"]);
+
+/**
+ * DSL command prefixes considered read-only, matched against the first two
+ * whitespace-separated tokens of `command` (case-insensitive). Kept
+ * separate from `COORDINATE_READ_ACTIONS` because the DSL's verb pairs
+ * don't map 1:1 onto `action` names (e.g. "EVENT INBOX" vs action `inbox`).
+ */
+const COORDINATE_READ_DSL_PREFIXES: RegExp[] = [
+	/^event\s+list\b/i,
+	/^event\s+wait\b/i,
+	/^event\s+inbox\b/i,
+	/^mesh\s+peers\b/i,
+	/^artifact\s+get\b/i,
+];
+
+/** See the doc comment on `COORDINATE_READ_ACTIONS` above. */
+export function isReadOnlyCoordinateCall(params: Record<string, unknown>): boolean {
+	const action = params.action;
+	if (typeof action === "string") {
+		return COORDINATE_READ_ACTIONS.has(action.toLowerCase());
+	}
+	const command = params.command;
+	if (typeof command === "string") {
+		const trimmed = command.trim();
+		return COORDINATE_READ_DSL_PREFIXES.some((re) => re.test(trimmed));
+	}
+	return false;
+}
+
 export interface McpManager {
 	light: PersistentMcpClient;
 	full: PersistentMcpClient | null;
@@ -101,7 +155,15 @@ async function registerServerTools(pi: ExtensionAPI, client: PersistentMcpClient
 			// type (not `any`) since it's structurally close enough to satisfy it.
 			parameters: tool.inputSchema as TSchema,
 			async execute(_toolCallId, params) {
-				if (isReadOnlyTool(tool.name)) {
+				// palace_coordinate can't be classified by name alone (see
+				// `isReadOnlyCoordinateCall`'s doc comment) — every other tool name
+				// is fully read-only or fully write, so `isReadOnlyTool` alone is
+				// enough for them.
+				const readOnly =
+					tool.name === "palace_coordinate"
+						? isReadOnlyCoordinateCall(params as Record<string, unknown>)
+						: isReadOnlyTool(tool.name);
+				if (readOnly) {
 					const result = await client.callTool(tool.name, params as Record<string, unknown>);
 					const content = result.content?.length
 						? result.content.map((c) => ({ type: "text" as const, text: c.text ?? "" }))
