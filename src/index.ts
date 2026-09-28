@@ -16,6 +16,7 @@ import { maybeRunDailyMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
 import { fetchDiaryDigest, fetchWakeUpDigest, resolveWakeUpWing } from "./wake-up.js";
 import { type AutosaveSettings, loadAutosaveSettings } from "./settings.js";
+import { ensureWriteRoutingPolicy } from "./write-routing.js";
 
 /**
  * Notifies defensively for callbacks that may run well after the triggering
@@ -61,7 +62,8 @@ export default function (pi: ExtensionAPI) {
 		dailyMine: { enabled: false, wing: "pi", limit: 100 },
 		model: undefined,
 		injectWakeUp: { enabled: true, mode: "sync", source: "user" },
-		mcp: { full: { enabled: false } },
+		mcp: { full: { enabled: false }, transport: "stdio", http: { host: "127.0.0.1", port: 8765 } },
+		writeRouting: { cli: "require", hooks: "require" },
 		forceMemoryRecall: { enabled: true, level: "sometimes" },
 	};
 	let lastCheckpointCount = 0;
@@ -181,6 +183,13 @@ export default function (pi: ExtensionAPI) {
 		// on a large sessions directory). Independent of checkpointDisabled:
 		// daily-mine doesn't use the checkpoint sub-agent model at all.
 		void maybeRunDailyMine(settings, { hasUI: true, notify: (msg, level) => safeNotify(ctx, msg, level) });
+
+		// Fire-and-forget, best-effort — makes sure MemPalace's own
+		// write_routing.cli/hooks policy is set to a safe value (see
+		// write-routing.ts) so an external `mempalace mine` outside pi-palace's
+		// control never races the hub/daemon for the palace write lock. Never
+		// overwrites an explicit user choice; never blocks session_start.
+		void ensureWriteRoutingPolicy(settings.writeRouting);
 	});
 
 	pi.on("session_shutdown", async () => {

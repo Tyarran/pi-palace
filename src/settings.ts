@@ -44,9 +44,40 @@ export interface InjectWakeUpSettings {
 	wing?: string;
 }
 
+export type McpTransport = "stdio" | "http";
+
+export interface McpHttpSettings {
+	// Loopback-only by convention (the hub is a local, pi-palace-managed
+	// process, never meant to be exposed off-machine — see hub-manager.ts).
+	host: string;
+	port: number;
+}
+
 export interface McpSettings {
 	// light has no toggle — always connected, it's the mandatory baseline.
 	full: { enabled: boolean };
+	// "stdio" (default): spawn mempalace-mcp/mempalace-light-mcp per session,
+	// exactly as before this setting existed. "http": reads (and tools/list
+	// discovery) go through a shared read-only HTTP hub instead — see
+	// hub-manager.ts. Writes are ALWAYS routed through the daemon
+	// (submitMcpToolJobWaiting) regardless of this setting — this only
+	// changes the read path.
+	transport: McpTransport;
+	http: McpHttpSettings;
+}
+
+export type WriteRoutingPolicy = "direct" | "prefer" | "require";
+
+export interface WriteRoutingSettings {
+	// Mirrors MemPalace's own write_routing.cli / write_routing.hooks policy
+	// (docs/write-routing-policy.md) — pi-palace writes these into
+	// ~/.mempalace/config.json (merged, never overwriting an existing value)
+	// so an external `mempalace mine` (manual run, another tool's hook) never
+	// races the hub/daemon for the palace write lock: with "require", it
+	// either queues behind the daemon or is refused outright — never a
+	// direct write that could collide (see write-routing.ts).
+	cli: WriteRoutingPolicy;
+	hooks: WriteRoutingPolicy;
 }
 
 export interface ForceMemoryRecallSettings {
@@ -82,6 +113,7 @@ export interface AutosaveSettings {
 	model: ModelSettings | undefined;
 	injectWakeUp: InjectWakeUpSettings;
 	mcp: McpSettings;
+	writeRouting: WriteRoutingSettings;
 	forceMemoryRecall: ForceMemoryRecallSettings;
 }
 
@@ -107,6 +139,16 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 	},
 	mcp: {
 		full: { enabled: false },
+		transport: "stdio",
+		http: { host: "127.0.0.1", port: 8765 },
+	},
+	// "require" for both: never let an external `mempalace mine` (manual run,
+	// another tool's hook) race the hub/daemon for the palace write lock —
+	// see write-routing.ts and the McpSettings/WriteRoutingSettings doc
+	// comments above.
+	writeRouting: {
+		cli: "require",
+		hooks: "require",
 	},
 	// Same low-risk rationale as injectWakeUp: read-only, best-effort, and
 	// silently a no-op when there's no digest to callback to. "sometimes" is
@@ -127,7 +169,8 @@ interface RawSettingsShape {
 		dailyMine: Partial<DailyMineSettings>;
 		model: Partial<ModelSettings>;
 		injectWakeUp: Partial<InjectWakeUpSettings> & { source?: InjectWakeUpSource };
-		mcp: Partial<{ full: Partial<{ enabled: boolean }> }>;
+		mcp: Partial<{ full: Partial<{ enabled: boolean }>; transport: McpTransport; http: Partial<McpHttpSettings> }>;
+		writeRouting: Partial<WriteRoutingSettings>;
 		forceMemoryRecall: Partial<ForceMemoryRecallSettings>;
 	}>;
 }
@@ -209,8 +252,33 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		...globalRaw?.piPalace?.mcp?.full,
 		...projectRaw?.piPalace?.mcp?.full,
 	};
+	const rawMcpTransport = projectRaw?.piPalace?.mcp?.transport ?? globalRaw?.piPalace?.mcp?.transport;
+	const transport: McpTransport = rawMcpTransport === "http" ? "http" : "stdio";
+	const rawMcpHttp = {
+		...DEFAULTS.mcp.http,
+		...globalRaw?.piPalace?.mcp?.http,
+		...projectRaw?.piPalace?.mcp?.http,
+	};
+	const http: McpHttpSettings = {
+		host: typeof rawMcpHttp.host === "string" && rawMcpHttp.host.trim() ? rawMcpHttp.host.trim() : DEFAULTS.mcp.http.host,
+		port: Number.isFinite(rawMcpHttp.port) && (rawMcpHttp.port as number) > 0 ? Math.floor(rawMcpHttp.port as number) : DEFAULTS.mcp.http.port,
+	};
 	const mcp: McpSettings = {
 		full: { enabled: rawMcpFull.enabled === true },
+		transport,
+		http,
+	};
+
+	const rawWriteRouting = {
+		...DEFAULTS.writeRouting,
+		...globalRaw?.piPalace?.writeRouting,
+		...projectRaw?.piPalace?.writeRouting,
+	};
+	const validPolicy = (value: unknown, fallback: WriteRoutingPolicy): WriteRoutingPolicy =>
+		value === "direct" || value === "prefer" || value === "require" ? value : fallback;
+	const writeRouting: WriteRoutingSettings = {
+		cli: validPolicy(rawWriteRouting.cli, DEFAULTS.writeRouting.cli),
+		hooks: validPolicy(rawWriteRouting.hooks, DEFAULTS.writeRouting.hooks),
 	};
 
 	const rawForceMemoryRecall = {
@@ -223,5 +291,5 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		level: rawForceMemoryRecall.level === "always" ? "always" : "sometimes",
 	};
 
-	return { interval, mode, userWing, agentName, diaryWing, dailyMine, model, injectWakeUp, mcp, forceMemoryRecall };
+	return { interval, mode, userWing, agentName, diaryWing, dailyMine, model, injectWakeUp, mcp, writeRouting, forceMemoryRecall };
 }

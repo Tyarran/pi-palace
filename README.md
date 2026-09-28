@@ -98,8 +98,25 @@ All options are set in pi's `settings.json` (global or project), under the `piPa
 | `piPalace.injectWakeUp.wing` | The explicit wing name used when `injectWakeUp.source` is `"custom"` | `string` | *(none)* |
 | `piPalace.model.provider` / `piPalace.model.id` | The model used to curate and decide what to keep during a save | `string` / `string` | *(none — disables checkpointing)* |
 | `piPalace.mcp.full.enabled` | Enable the optional full MemPalace MCP server (in addition to the mandatory light one) | `boolean` | `false` |
+| `piPalace.mcp.transport` | Read path for the **full** MCP connection only: `"stdio"` spawns `mempalace-mcp` per session (as before); `"http"` reads through a shared read-only HTTP hub pi-palace starts/reuses (`mempalace serve --read-only`). Has no effect on the mandatory **light** connection (`mempalace-light-mcp` has no HTTP transport of its own) or on writes, which are always daemon-routed in both modes. Has no effect at all unless `piPalace.mcp.full.enabled` is also `true`. | `"stdio" \| "http"` | `"stdio"` |
+| `piPalace.mcp.http.host` / `piPalace.mcp.http.port` | Host/port the HTTP hub binds to (loopback-only by convention) when `piPalace.mcp.transport` is `"http"` | `string` / `number` | `"127.0.0.1"` / `8765` |
+| `piPalace.writeRouting.cli` / `piPalace.writeRouting.hooks` | MemPalace's own write-routing policy (`"direct" \| "prefer" \| "require"`, see [docs/write-routing-policy.md](https://github.com/MemPalace/mempalace/blob/develop/docs/write-routing-policy.md) upstream), written into `~/.mempalace/config.json` if not already set (never overwrites an explicit existing value). `"require"` guarantees an external `mempalace mine` (a manual run, another tool's hook) always queues behind the daemon instead of racing the palace write lock. | `"direct" \| "prefer" \| "require"` | `"require"` |
 | `piPalace.forceMemoryRecall.enabled` | Enable/disable instructing the agent to call back to past conversations/topics when relevant (has no effect if `injectWakeUp.enabled` is `false`) | `boolean` | `true` |
 | `piPalace.forceMemoryRecall.level` | `"sometimes"` calls back only when genuinely relevant, generously but never forced; `"always"` asks for a callback in every response | `"sometimes" \| "always"` | `"sometimes"` |
+
+### Migration note: duplicate `mempalace`/`mempalace-light` MCP declarations
+
+pi-palace owns the `mempalace`/`mempalace-light` MCP connections exclusively — it spawns/manages them itself (or the HTTP hub, in `"http"` transport mode). Declaring `mempalace` and/or `mempalace-light` as *generic* MCP servers as well (in pi's own `mcp.json`, outside `piPalace`) creates a second, independent connection that can race pi-palace's daemon-routed writes for the palace's single-writer lock, surfacing as `"Peer MCP writer active"` errors ([#7](https://github.com/Tyarran/pi-palace/issues/7)).
+
+If your `~/.pi/agent/mcp.json` (or a project-level `.pi/mcp.json`) already declares `mempalace` and/or `mempalace-light`, remove those entries — this is a one-time manual cleanup, not something pi-palace automates for you.
+
+If you previously set up a systemd unit to keep an HTTP MCP server running permanently (e.g. `~/.config/systemd/user/mempalace-daemon.service` running `mempalace-mcp --transport=http`), disable and remove it too — that responsibility now belongs to pi-palace itself (`piPalace.mcp.transport: "http"`, see above):
+
+```sh
+systemctl --user disable --now mempalace-daemon
+rm ~/.config/systemd/user/mempalace-daemon.service
+systemctl --user daemon-reload
+```
 
 ---
 

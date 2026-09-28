@@ -1,8 +1,24 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { submitMcpToolJobWaiting } from "./daemon-client.js";
-import { type McpToolCallResult, PersistentMcpClient } from "./persistent-mcp-client.js";
+import { HubClient } from "./hub-client.js";
+import { ensureHubRunning } from "./hub-manager.js";
+import { type McpToolCallResult, type McpToolSchema, PersistentMcpClient } from "./persistent-mcp-client.js";
 import type { AutosaveSettings } from "./settings.js";
+
+/**
+ * What `registerServerTools` needs from a connection — satisfied structurally
+ * by both `PersistentMcpClient` (stdio, the only transport `light` ever uses —
+ * `mempalace-light-mcp` has no HTTP transport of its own, see hub-manager.ts's
+ * doc comment) and `HubClient` (HTTP, used for `full`'s read path when
+ * `piPalace.mcp.transport === "http"`). Write execution never touches this —
+ * every mutating tool call goes through `submitMcpToolJobWaiting` regardless
+ * of which client discovered/read it (see `registerServerTools` below).
+ */
+export interface ReadCapableClient {
+	listTools(): Promise<McpToolSchema[]>;
+	callTool(name: string, args: Record<string, unknown>): Promise<McpToolCallResult>;
+}
 
 /**
  * Read-only `mempalace_*` tool names — called directly against the
@@ -120,7 +136,11 @@ export function isReadOnlyCoordinateCall(params: Record<string, unknown>): boole
 
 export interface McpManager {
 	light: PersistentMcpClient;
-	full: PersistentMcpClient | null;
+	// null when full is disabled, OR when it failed to come up (stdio mode) —
+	// both existing behavior. In http mode this is a HubClient instead of a
+	// PersistentMcpClient: the hub is a shared, externally-lived process (see
+	// hub-manager.ts), so McpManager.close() never tears it down either way.
+	full: ReadCapableClient | null;
 	callLightTool(name: string, args: Record<string, unknown>): Promise<McpToolCallResult>;
 	close(): void;
 }
@@ -143,7 +163,7 @@ export interface McpManager {
  * calling LLM can read and act on (e.g. tell the user to retry later)
  * instead of a generic failure.
  */
-async function registerServerTools(pi: ExtensionAPI, client: PersistentMcpClient): Promise<void> {
+async function registerServerTools(pi: ExtensionAPI, client: ReadCapableClient): Promise<void> {
 	const tools = await client.listTools();
 	for (const tool of tools) {
 		pi.registerTool({
@@ -198,24 +218,45 @@ async function registerServerTools(pi: ExtensionAPI, client: PersistentMcpClient
  * fought earlier this project).
  */
 export async function initMcpManager(pi: ExtensionAPI, settings: AutosaveSettings): Promise<McpManager> {
+	// Always stdio, regardless of piPalace.mcp.transport — mempalace-light-mcp
+	// has no --transport http of its own (validated during this issue's
+	// implementation), so the transport setting can only ever affect `full`.
 	const light = new PersistentMcpClient("mempalace-light-mcp");
 
 	try {
 		await light.waitUntilReady();
 		await registerServerTools(pi, light);
 
-		let full: PersistentMcpClient | null = null;
+		let full: ReadCapableClient | null = null;
+		// Only the stdio branch owns a process pi-palace must close itself — the
+		// hub is shared/externally-lived (see hub-manager.ts), so closeFull stays
+		// a no-op in http mode.
+		let closeFull: () => void = () => {};
 		if (settings.mcp.full.enabled) {
-			full = new PersistentMcpClient("mempalace-mcp");
-			try {
-				await full.waitUntilReady();
-				await registerServerTools(pi, full);
-			} catch (err) {
-				// Only the full server failed to come up — light stays usable,
-				// close just the failed one instead of tearing everything down.
-				full.close();
-				full = null;
-				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] full MCP server init failed:", err);
+			if (settings.mcp.transport === "http") {
+				try {
+					const hub = await ensureHubRunning(settings.mcp.http);
+					const hubClient = new HubClient(hub);
+					await registerServerTools(pi, hubClient);
+					full = hubClient;
+				} catch (err) {
+					// Hub unreachable/failed to start — light stays usable, full is
+					// just disabled for this session (mirrors the stdio failure path below).
+					if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] HTTP hub init failed:", err);
+				}
+			} else {
+				const fullClient = new PersistentMcpClient("mempalace-mcp");
+				try {
+					await fullClient.waitUntilReady();
+					await registerServerTools(pi, fullClient);
+					full = fullClient;
+					closeFull = () => fullClient.close();
+				} catch (err) {
+					// Only the full server failed to come up — light stays usable,
+					// close just the failed one instead of tearing everything down.
+					fullClient.close();
+					if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] full MCP server init failed:", err);
+				}
 			}
 		}
 
@@ -225,7 +266,7 @@ export async function initMcpManager(pi: ExtensionAPI, settings: AutosaveSetting
 			callLightTool: (name, args) => light.callTool(name, args),
 			close: () => {
 				light.close();
-				full?.close();
+				closeFull();
 			},
 		};
 	} catch (err) {
