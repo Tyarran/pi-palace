@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolveWakeUpWing } from "./wake-up.js";
-import type { AutosaveSettings } from "./settings.js";
+import { resolveWakeUpWing } from "../src/wake-up.js";
+import type { AutosaveSettings } from "../src/settings.js";
 
 type Settings = Pick<AutosaveSettings, "userWing" | "injectWakeUp">;
 

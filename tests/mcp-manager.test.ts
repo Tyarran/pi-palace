@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isReadOnlyCoordinateCall, isReadOnlyTool } from "./mcp-manager.js";
+import { isReadOnlyCoordinateCall, isReadOnlyTool } from "../src/mcp-manager.js";
 
 describe("isReadOnlyTool", () => {
 	test("classifies the mempalace-light unified query tool as read-only", () => {

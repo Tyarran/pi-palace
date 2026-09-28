@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyDaemonJobOutcome, classifyMempalaceError } from "./daemon-client.js";
+import { classifyDaemonJobOutcome, classifyMempalaceError } from "../src/daemon-client.js";
 
 describe("classifyDaemonJobOutcome", () => {
 	test("succeeded job returns its result payload", () => {
