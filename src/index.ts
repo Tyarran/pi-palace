@@ -62,7 +62,7 @@ export default function (pi: ExtensionAPI) {
 		dailyMine: { enabled: false, wing: "pi", limit: 100 },
 		model: undefined,
 		injectWakeUp: { enabled: true, mode: "sync", source: "user" },
-		mcp: { full: { enabled: false }, transport: "stdio", http: { host: "127.0.0.1", port: 8765 } },
+		mcp: { light: { enabled: true }, full: { enabled: false }, transport: "stdio", http: { host: "127.0.0.1", port: 8765 } },
 		writeRouting: { cli: "require", hooks: "require" },
 		forceMemoryRecall: { enabled: true, level: "sometimes" },
 	};
@@ -90,7 +90,8 @@ export default function (pi: ExtensionAPI) {
 	// state, see resolveWakeUpWing) the wake-up fetch is scoped to for this
 	// session, resolved once in session_start from injectWakeUp.source.
 	let resolvedWing: string | null = null;
-	// The persistent MCP connections (light mandatory, full opt-in), shared
+	// The persistent MCP connections (light and full, both individually
+	// toggleable but never both disabled at once \u2014 see settings.ts), shared
 	// by the main session's registered tools AND the checkpoint sub-agent /
 	// profile digest — see mcp-manager.ts for why this replaced the old
 	// one-shot-per-call clients.
@@ -124,6 +125,21 @@ export default function (pi: ExtensionAPI) {
 				'pi-palace: "userWing" is not configured in settings.json (piPalace.userWing) — user preference filing will be skipped.',
 				"warning",
 			);
+		}
+
+		// Fail-safe: a session must never end up with zero registered
+		// MemPalace tools. Corrects the in-memory settings (not the file on
+		// disk) so mcp-manager.ts sees the enforced value — mirrors how the
+		// model/userWing guards above only warn+degrade rather than touch
+		// settings.json.
+		if (!settings.mcp.light.enabled && !settings.mcp.full.enabled) {
+			settings.mcp.light.enabled = true;
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					"pi-palace: both mcp.light and mcp.full were disabled — re-enabling mcp.light (piPalace.mcp.light.enabled) so at least one MemPalace connection stays available.",
+					"warning",
+				);
+			}
 		}
 
 		mcpManager?.close();

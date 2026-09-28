@@ -55,9 +55,7 @@ export async function fetchWakeUpDigest(wing: string | null): Promise<string | n
  * accepted trade-off, not a bug.
  */
 export async function fetchDiaryDigest(mcpManager: McpManager, agentName: string): Promise<string | null> {
-	const diaryResult = await mcpManager
-		.callLightTool("palace_query", { target: "diary_read", agent_name: agentName, last_n: DIARY_LAST_N })
-		.catch(() => null);
+	const diaryResult = await mcpManager.readDiary(agentName, DIARY_LAST_N).catch(() => null);
 
 	const diaryText = diaryResult?.content
 		?.map((c) => c.text ?? "")

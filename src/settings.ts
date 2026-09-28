@@ -54,7 +54,12 @@ export interface McpHttpSettings {
 }
 
 export interface McpSettings {
-	// light has no toggle — always connected, it's the mandatory baseline.
+	// Both light and full are individually toggleable, but never both
+	// disabled at once — index.ts enforces at least one stays enabled
+	// (fail-safe: a session must never end up with zero MemPalace tools
+	// registered). light defaults to enabled (backward-compatible with the
+	// pre-toggle behavior, where it had no off switch at all).
+	light: { enabled: boolean };
 	full: { enabled: boolean };
 	// "stdio" (default): spawn mempalace-mcp/mempalace-light-mcp per session,
 	// exactly as before this setting existed. "http": reads (and tools/list
@@ -138,6 +143,7 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 		source: "user",
 	},
 	mcp: {
+		light: { enabled: true },
 		full: { enabled: false },
 		transport: "stdio",
 		http: { host: "127.0.0.1", port: 8765 },
@@ -169,7 +175,7 @@ interface RawSettingsShape {
 		dailyMine: Partial<DailyMineSettings>;
 		model: Partial<ModelSettings>;
 		injectWakeUp: Partial<InjectWakeUpSettings> & { source?: InjectWakeUpSource };
-		mcp: Partial<{ full: Partial<{ enabled: boolean }>; transport: McpTransport; http: Partial<McpHttpSettings> }>;
+		mcp: Partial<{ light: Partial<{ enabled: boolean }>; full: Partial<{ enabled: boolean }>; transport: McpTransport; http: Partial<McpHttpSettings> }>;
 		writeRouting: Partial<WriteRoutingSettings>;
 		forceMemoryRecall: Partial<ForceMemoryRecallSettings>;
 	}>;
@@ -191,8 +197,16 @@ async function readJsonSafe(path: string): Promise<RawSettingsShape | undefined>
  * namespaces, so we read the files directly — same approach other extensions
  * (e.g. piJj) rely on via their own top-level settings key.
  */
-export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSettings> {
-	const globalPath = join(homedir(), ".pi", "agent", "settings.json");
+export async function loadAutosaveSettings(
+	cwd: string,
+	// Overridable for tests: os.homedir() does not re-read $HOME dynamically
+	// mid-process under Bun (unlike Node), so pointing tests at a throwaway
+	// $HOME does not isolate them from this machine's real global
+	// settings.json. Passing an explicit path sidesteps that entirely rather
+	// than fighting module-cache/mocking ordering across test files. Real
+	// callers (index.ts) never pass this, so behavior is unchanged for them.
+	globalPath: string = join(homedir(), ".pi", "agent", "settings.json"),
+): Promise<AutosaveSettings> {
 	const projectPath = join(cwd, ".pi", "settings.json");
 
 	const [globalRaw, projectRaw] = await Promise.all([readJsonSafe(globalPath), readJsonSafe(projectPath)]);
@@ -247,6 +261,11 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		wing,
 	};
 
+	const rawMcpLight = {
+		...DEFAULTS.mcp.light,
+		...globalRaw?.piPalace?.mcp?.light,
+		...projectRaw?.piPalace?.mcp?.light,
+	};
 	const rawMcpFull = {
 		...DEFAULTS.mcp.full,
 		...globalRaw?.piPalace?.mcp?.full,
@@ -264,6 +283,11 @@ export async function loadAutosaveSettings(cwd: string): Promise<AutosaveSetting
 		port: Number.isFinite(rawMcpHttp.port) && (rawMcpHttp.port as number) > 0 ? Math.floor(rawMcpHttp.port as number) : DEFAULTS.mcp.http.port,
 	};
 	const mcp: McpSettings = {
+		// Not enforced here ("at least one enabled") \u2014 that fail-safe lives in
+		// index.ts's session_start, alongside its user-facing warning toast,
+		// matching how other cross-field guards (model/userWing) are handled in
+		// this codebase rather than inside loadAutosaveSettings itself.
+		light: { enabled: rawMcpLight.enabled !== false }, // default true unless explicitly disabled
 		full: { enabled: rawMcpFull.enabled === true },
 		transport,
 		http,

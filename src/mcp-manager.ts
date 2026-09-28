@@ -135,13 +135,24 @@ export function isReadOnlyCoordinateCall(params: Record<string, unknown>): boole
 }
 
 export interface McpManager {
-	light: PersistentMcpClient;
-	// null when full is disabled, OR when it failed to come up (stdio mode) —
-	// both existing behavior. In http mode this is a HubClient instead of a
+	// null when disabled (piPalace.mcp.light.enabled: false) or when it failed
+	// to come up (stdio-only — light has no HTTP transport, see
+	// hub-manager.ts's doc comment). index.ts's session_start enforces that
+	// light and full are never BOTH disabled by configuration, but a runtime
+	// failure of whichever one is enabled can still leave this null.
+	light: PersistentMcpClient | null;
+	// null when disabled, OR when it failed to come up (stdio mode) — both
+	// existing behavior. In http mode this is a HubClient instead of a
 	// PersistentMcpClient: the hub is a shared, externally-lived process (see
 	// hub-manager.ts), so McpManager.close() never tears it down either way.
 	full: ReadCapableClient | null;
-	callLightTool(name: string, args: Record<string, unknown>): Promise<McpToolCallResult>;
+	// Fetches the current agent's diary (used by wake-up.ts): prefers `light`
+	// (`palace_query`, target `diary_read`) when available, falls back to
+	// `full`'s direct `mempalace_diary_read` tool otherwise — the two
+	// connections expose the same underlying data under different tool
+	// shapes, so this is the one place that difference needs to be known.
+	// Throws if neither connection is available.
+	readDiary(agentName: string, lastN: number): Promise<McpToolCallResult>;
 	close(): void;
 }
 
@@ -210,73 +221,106 @@ async function registerServerTools(pi: ExtensionAPI, client: ReadCapableClient):
 }
 
 /**
- * light is mandatory, full is opt-in (settings.mcp.full.enabled). Both
- * connections are established here, at session_start, and kept open for
- * the session's lifetime — this is what lets the checkpoint sub-agent and
- * the profile-injection digest reuse an already-warm connection instead of
- * paying a fresh process-startup cost per call (the ~30s latency issues
- * fought earlier this project).
+ * Fetches an agent's diary, preferring `light` (`palace_query`, target
+ * `diary_read`) and falling back to `full`'s direct `mempalace_diary_read`
+ * tool when light is unavailable \u2014 the two connections expose the same
+ * underlying data under different tool shapes (see `McpManager.readDiary`'s
+ * doc comment). Extracted as a standalone pure function (taking the two
+ * connections as plain arguments rather than reading them off `McpManager`)
+ * specifically so it's unit-testable with lightweight mock clients, without
+ * needing to spin up `initMcpManager`'s real stdio/HTTP connections.
+ */
+export async function readDiaryVia(
+	light: ReadCapableClient | null,
+	full: ReadCapableClient | null,
+	agentName: string,
+	lastN: number,
+): Promise<McpToolCallResult> {
+	if (light) return light.callTool("palace_query", { target: "diary_read", agent_name: agentName, last_n: lastN });
+	if (full) return full.callTool("mempalace_diary_read", { agent_name: agentName, last_n: lastN });
+	throw new Error("no MemPalace MCP connection available (both light and full are disabled or unavailable)");
+}
+
+/**
+ * Both light and full are individually toggleable (settings.mcp.light.enabled
+ * / settings.mcp.full.enabled) — index.ts's session_start enforces that
+ * they're never both disabled by configuration. Both connections, when
+ * enabled, are established here, at session_start, and kept open for the
+ * session's lifetime — this is what lets the checkpoint sub-agent and the
+ * profile-injection digest reuse an already-warm connection instead of paying
+ * a fresh process-startup cost per call (the ~30s latency issues fought
+ * earlier this project).
  */
 export async function initMcpManager(pi: ExtensionAPI, settings: AutosaveSettings): Promise<McpManager> {
-	// Always stdio, regardless of piPalace.mcp.transport — mempalace-light-mcp
-	// has no --transport http of its own (validated during this issue's
-	// implementation), so the transport setting can only ever affect `full`.
-	const light = new PersistentMcpClient("mempalace-light-mcp");
+	let light: PersistentMcpClient | null = null;
+	// Only a stdio connection owns a process pi-palace must close itself — see
+	// the matching comment on closeFull below for why the hub (http mode)
+	// never needs this.
+	let closeLight: () => void = () => {};
+	if (settings.mcp.light.enabled) {
+		// Always stdio, regardless of piPalace.mcp.transport —
+		// mempalace-light-mcp has no --transport http of its own (validated
+		// during this issue's implementation), so the transport setting can
+		// only ever affect `full`.
+		const lightClient = new PersistentMcpClient("mempalace-light-mcp");
+		try {
+			await lightClient.waitUntilReady();
+			await registerServerTools(pi, lightClient);
+			light = lightClient;
+			closeLight = () => lightClient.close();
+		} catch (err) {
+			// light failed (spawn error, handshake failure, or a pi.registerTool()
+			// throw e.g. from a stale session mid-print-mode teardown) — without
+			// closing it here, the already-spawned child process is never closed
+			// and its open stdio pipes keep the whole pi process alive
+			// indefinitely (reproduced during testing: `pi -p` hung well past
+			// response completion with an orphaned mempalace-light-mcp). full may
+			// still be usable, so this degrades rather than throws.
+			lightClient.close();
+			if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] light MCP server init failed:", err);
+		}
+	}
 
-	try {
-		await light.waitUntilReady();
-		await registerServerTools(pi, light);
-
-		let full: ReadCapableClient | null = null;
-		// Only the stdio branch owns a process pi-palace must close itself — the
-		// hub is shared/externally-lived (see hub-manager.ts), so closeFull stays
-		// a no-op in http mode.
-		let closeFull: () => void = () => {};
-		if (settings.mcp.full.enabled) {
-			if (settings.mcp.transport === "http") {
-				try {
-					const hub = await ensureHubRunning(settings.mcp.http);
-					const hubClient = new HubClient(hub);
-					await registerServerTools(pi, hubClient);
-					full = hubClient;
-				} catch (err) {
-					// Hub unreachable/failed to start — light stays usable, full is
-					// just disabled for this session (mirrors the stdio failure path below).
-					if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] HTTP hub init failed:", err);
-				}
-			} else {
-				const fullClient = new PersistentMcpClient("mempalace-mcp");
-				try {
-					await fullClient.waitUntilReady();
-					await registerServerTools(pi, fullClient);
-					full = fullClient;
-					closeFull = () => fullClient.close();
-				} catch (err) {
-					// Only the full server failed to come up — light stays usable,
-					// close just the failed one instead of tearing everything down.
-					fullClient.close();
-					if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] full MCP server init failed:", err);
-				}
+	let full: ReadCapableClient | null = null;
+	// Only the stdio branch owns a process pi-palace must close itself — the
+	// hub is shared/externally-lived (see hub-manager.ts), so closeFull stays
+	// a no-op in http mode.
+	let closeFull: () => void = () => {};
+	if (settings.mcp.full.enabled) {
+		if (settings.mcp.transport === "http") {
+			try {
+				const hub = await ensureHubRunning(settings.mcp.http);
+				const hubClient = new HubClient(hub);
+				await registerServerTools(pi, hubClient);
+				full = hubClient;
+			} catch (err) {
+				// Hub unreachable/failed to start — light stays usable, full is
+				// just disabled for this session (mirrors the stdio failure path below).
+				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] HTTP hub init failed:", err);
+			}
+		} else {
+			const fullClient = new PersistentMcpClient("mempalace-mcp");
+			try {
+				await fullClient.waitUntilReady();
+				await registerServerTools(pi, fullClient);
+				full = fullClient;
+				closeFull = () => fullClient.close();
+			} catch (err) {
+				// Only the full server failed to come up — light stays usable,
+				// close just the failed one instead of tearing everything down.
+				fullClient.close();
+				if (process.env.MEMPALACE_AUTOSAVE_DEBUG) console.error("[pi-palace] full MCP server init failed:", err);
 			}
 		}
-
-		return {
-			light,
-			full,
-			callLightTool: (name, args) => light.callTool(name, args),
-			close: () => {
-				light.close();
-				closeFull();
-			},
-		};
-	} catch (err) {
-		// light itself failed (spawn error, handshake failure, or a
-		// pi.registerTool() throw e.g. from a stale session mid-print-mode
-		// teardown) — without this, the already-spawned child process is
-		// never closed and its open stdio pipes keep the whole pi process
-		// alive indefinitely (reproduced during testing: `pi -p` hung well
-		// past response completion with an orphaned mempalace-light-mcp).
-		light.close();
-		throw err;
 	}
+
+	return {
+		light,
+		full,
+		readDiary: (agentName, lastN) => readDiaryVia(light, full, agentName, lastN),
+		close: () => {
+			closeLight();
+			closeFull();
+		},
+	};
 }

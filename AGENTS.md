@@ -28,7 +28,7 @@ pi-palace/
 | `checkpoint-agent.ts` | Resolves the configured model + runs the checkpoint sub-agent |
 | `checkpoint-tool.ts` | Defines the `mempalace_checkpoint` tool exposed to the sub-agent |
 | `counter.ts` | Counts relevant exchanges to trigger an auto-checkpoint every N messages |
-| `mcp-manager.ts` | Initializes/manages the MCP connection to MemPalace (light + optional "full"); branches the **full** connection's read path between stdio and the HTTP hub per `piPalace.mcp.transport` (light is always stdio — see `hub-manager.ts`) |
+| `mcp-manager.ts` | Initializes/manages the MCP connections to MemPalace (light and full, each individually toggleable, never both disabled at once); branches the **full** connection's read path between stdio and the HTTP hub per `piPalace.mcp.transport` (light is always stdio when enabled — see `hub-manager.ts`) |
 | `persistent-mcp-client.ts` | Stdio JSON-RPC MCP client kept open for the whole session |
 | `hub-manager.ts` | Lifecycle of the shared read-only HTTP MCP hub (`mempalace serve --read-only`) used when `piPalace.mcp.transport === "http"` |
 | `hub-client.ts` | HTTP JSON-RPC client for the hub (`tools/list`/`tools/call` over `/mcp`) |

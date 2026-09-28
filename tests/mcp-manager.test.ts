@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { isReadOnlyCoordinateCall, isReadOnlyTool } from "../src/mcp-manager.js";
+import { isReadOnlyCoordinateCall, isReadOnlyTool, type ReadCapableClient, readDiaryVia } from "../src/mcp-manager.js";
+
+function fakeClient(response: unknown): ReadCapableClient {
+	return {
+		listTools: async () => [],
+		callTool: async () => response as never,
+	};
+}
 
 describe("isReadOnlyTool", () => {
 	test("classifies the mempalace-light unified query tool as read-only", () => {
@@ -72,5 +79,44 @@ describe("isReadOnlyCoordinateCall", () => {
 		expect(isReadOnlyCoordinateCall({})).toBe(false);
 		expect(isReadOnlyCoordinateCall({ action: 123 })).toBe(false);
 		expect(isReadOnlyCoordinateCall({ command: 456 })).toBe(false);
+	});
+});
+
+describe("readDiaryVia", () => {
+	test("prefers light when available, calling palace_query with target diary_read", async () => {
+		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+		const light: ReadCapableClient = {
+			listTools: async () => [],
+			callTool: async (name, args) => {
+				calls.push({ name, args });
+				return { content: [{ type: "text", text: "from light" }] };
+			},
+		};
+		const full = fakeClient({ content: [{ type: "text", text: "from full" }] });
+
+		const result = await readDiaryVia(light, full, "pi", 5);
+
+		expect(calls).toEqual([{ name: "palace_query", args: { target: "diary_read", agent_name: "pi", last_n: 5 } }]);
+		expect(result.content?.[0]?.text).toBe("from light");
+	});
+
+	test("falls back to full's mempalace_diary_read when light is null", async () => {
+		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+		const full: ReadCapableClient = {
+			listTools: async () => [],
+			callTool: async (name, args) => {
+				calls.push({ name, args });
+				return { content: [{ type: "text", text: "from full" }] };
+			},
+		};
+
+		const result = await readDiaryVia(null, full, "pi", 5);
+
+		expect(calls).toEqual([{ name: "mempalace_diary_read", args: { agent_name: "pi", last_n: 5 } }]);
+		expect(result.content?.[0]?.text).toBe("from full");
+	});
+
+	test("throws when neither connection is available", async () => {
+		await expect(readDiaryVia(null, null, "pi", 5)).rejects.toThrow(/no MemPalace MCP connection available/);
 	});
 });
