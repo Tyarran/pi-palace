@@ -68,6 +68,8 @@ pi-palace keeps a live connection to MemPalace open for the whole session, so re
 
 The `/checkpoint` command lets you force a save at any time, without waiting for the next automatic trigger.
 
+The `/palace-mine` command runs the session mining pass on demand: same source (`~/.pi/agent/sessions/`), wing and limit as the daily mine (`piPalace.dailyMine.wing` / `limit`), but it ignores both `piPalace.dailyMine.enabled` and the once-a-day guard, never reads or writes the daily state, and carries no deduplication key (it is never merged with a daily job). Fire-and-forget: you get an "in progress" toast, then an error toast only if the daemon can't start or the job is refused.
+
 ### 8. 🧹 Palace audit & repair
 
 The `/palace-audit` command runs a read-only `mempalace audit`, walks you through an interactive repair session — one question at a time, recommended option first, nothing done without confirmation (merging duplicate wings/rooms, cleaning up generic tunnels/hallways, agreeing a consistent knowledge-graph vocabulary, structuring flat wings into rooms) — then a `mempalace_sync` pass (dry-run first) to prune drawers whose source files are gone, and closes out with a before/after score diary entry. Requires `piPalace.mcp.full.enabled` (the repair step needs the full server's tunnel/hallway/sync tools). Manual trigger only, never runs in the background.
@@ -182,6 +184,8 @@ bun run typecheck
 ---
 
 ## 📝 Recent changes
+
+- **`/palace-mine` command**: on-demand mining of pi sessions, independent of `dailyMine.enabled`, the once-a-day guard and the daily state; uses the `dailyMine` wing/limit settings and no dedupe key.
 
 - **Configurable MCP connection lifetime (`mcp.connection`)**: stdio MCP processes are now short-lived by default (`"per-call"`): tools are discovered once at session start, then each read call spawns and closes its own process, so no MemPalace process stays resident. Set `piPalace.mcp.connection` to `"persistent"` for the previous always-open behavior. Also fixes a 30s call-timeout timer that was never cleared and could keep `pi -p` alive.
 - **Recall improvements**: the memory-callback instruction was rewritten into a search-before-answer protocol (adapted from MemPalace's own `mempalace-recall` skill) and is now reinjected on every turn instead of only the first message, so it stays in force for the whole session. A dedicated verbatim-discipline instruction was added alongside it. The checkpoint sub-agent can now also write knowledge-graph facts (`mempalace_kg_add`/`kg_supersede`/`kg_invalidate`) in addition to drawers. A new `/palace-audit` command runs MemPalace's audit + interactive repair + sync flow. Checkpoint failures now show an actionable, classified toast instead of a generic one.

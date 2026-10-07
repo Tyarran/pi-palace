@@ -12,7 +12,7 @@ import {
 	VERBATIM_DISCIPLINE_INSTRUCTION,
 } from "./constants.js";
 import { classifyMempalaceError } from "./daemon-client.js";
-import { maybeRunDailyMine } from "./daily-mine.js";
+import { maybeRunDailyMine, runManualMine } from "./daily-mine.js";
 import { initMcpManager, type McpManager } from "./mcp-manager.js";
 import { fetchDiaryDigest, fetchWakeUpDigest, resolveWakeUpWing } from "./wake-up.js";
 import { type AutosaveSettings, loadAutosaveSettings } from "./settings.js";
@@ -329,6 +329,16 @@ export default function (pi: ExtensionAPI) {
 			// Resync the interval counter so the next automatic trigger doesn't
 			// fire again immediately right after this manual one.
 			lastCheckpointCount = currentCount;
+		},
+	});
+
+	// On-demand mine of pi sessions: same source/wing/limit as the daily mine,
+	// but ignores dailyMine.enabled and the once-a-day guard, and never touches
+	// the daily state. Fire-and-forget (job accepted ≠ job finished).
+	pi.registerCommand("palace-mine", {
+		description: "Mine pi sessions into MemPalace now (ignores the daily guard and dailyMine.enabled)",
+		handler: async (_args, ctx) => {
+			await runManualMine(settings, { hasUI: true, notify: (msg, level) => safeNotify(ctx, msg, level) });
 		},
 	});
 

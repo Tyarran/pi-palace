@@ -1,7 +1,9 @@
 /**
  * Manages the MemPalace daemon lifecycle (check/start) and submits the
  * daily-mine job with a fixed dedupe_key, so concurrent pi sessions never
- * cause two identical mine jobs to run at once.
+ * cause two identical mine jobs to run at once. The on-demand mine
+ * (`/palace-mine`) passes no dedupe_key at all, so it is never coalesced
+ * with (or blocked by) a daily job.
  *
  * dedupe_key is not exposed by the `mempalace mine` CLI (verified during
  * this session), only by the Python daemon.submit_job() API. We call it
@@ -52,7 +54,7 @@ async function resolveMempalacePython(): Promise<string> {
 	return cachedPython;
 }
 
-const DAILY_MINE_DEDUPE_KEY = "pi-daily-sessions-mine";
+export const DAILY_MINE_DEDUPE_KEY = "pi-daily-sessions-mine";
 
 export interface DaemonMineResult {
 	success: boolean;
@@ -176,7 +178,13 @@ export async function ensureDaemonRunning(): Promise<boolean> {
  * process exit far longer than acceptable. The cost: we lose the
  * "finished" toast — success here means "submitted", not "completed".
  */
-export async function submitDailyMineJob(sessionsDir: string, wing: string, limit: number): Promise<DaemonMineResult> {
+export async function submitDailyMineJob(
+	sessionsDir: string,
+	wing: string,
+	limit: number,
+	// null = no deduplication (on-demand mine); defaults to the daily key.
+	dedupeKey: string | null = DAILY_MINE_DEDUPE_KEY,
+): Promise<DaemonMineResult> {
 	const script = [
 		"import json, sys",
 		"from mempalace.daemon import submit_job, DaemonError",
@@ -210,7 +218,7 @@ export async function submitDailyMineJob(sessionsDir: string, wing: string, limi
 	].join("\n");
 
 	// limit follows mempalace mine's own --limit convention: 0 = unlimited.
-	const payload = JSON.stringify({ source: sessionsDir, wing, limit, dedupe_key: DAILY_MINE_DEDUPE_KEY });
+	const payload = JSON.stringify({ source: sessionsDir, wing, limit, dedupe_key: dedupeKey });
 
 	try {
 		const python = await resolveMempalacePython();

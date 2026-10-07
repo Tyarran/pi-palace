@@ -35,8 +35,8 @@ pi-palace/
 | `hub-client.ts` | HTTP JSON-RPC client for the hub (`tools/list`/`tools/call` over `/mcp`) |
 | `hub-token.ts` | Generates/persists pi-palace's own bearer token for the hub |
 | `write-routing.ts` | Ensures MemPalace's `write_routing.cli`/`write_routing.hooks` policy (`~/.mempalace/config.json`) is set, without overwriting an explicit existing value |
-| `daemon-client.ts` | Communication with the daemon for daily mining |
-| `daily-mine.ts` | Triggers the daily background mining pass |
+| `daemon-client.ts` | Communication with the daemon for daily mining (`submitDailyMineJob` takes an optional `dedupeKey`; `null` = no dedup) |
+| `daily-mine.ts` | Triggers the daily background mining pass (`maybeRunDailyMine`) and the on-demand `/palace-mine` variant (`runManualMine`: ignores `enabled` + daily guard + daily state, no dedupe key); collaborators are injectable via `DailyMineDeps` for tests |
 | `daily-mine-state.ts` | Persists state (last run date) for daily mining |
 | `wake-up.ts` | Fetches the welcome digest (user preferences + diary) on startup |
 | `wake-up-cli.ts` | CLI/standalone variant of the wake-up |
