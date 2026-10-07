@@ -62,7 +62,7 @@ export default function (pi: ExtensionAPI) {
 		dailyMine: { enabled: false, wing: "pi", limit: 100 },
 		model: undefined,
 		injectWakeUp: { enabled: true, mode: "sync", source: "user" },
-		mcp: { light: { enabled: true }, full: { enabled: false }, transport: "stdio", http: { host: "127.0.0.1", port: 8765 } },
+		mcp: { light: { enabled: true }, full: { enabled: false }, transport: "stdio", connection: "per-call", http: { host: "127.0.0.1", port: 8765 } },
 		writeRouting: { cli: "require", hooks: "require" },
 		forceMemoryRecall: { enabled: true, level: "sometimes" },
 	};

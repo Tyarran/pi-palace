@@ -45,6 +45,7 @@ export interface InjectWakeUpSettings {
 }
 
 export type McpTransport = "stdio" | "http";
+export type McpConnection = "persistent" | "per-call";
 
 export interface McpHttpSettings {
 	// Loopback-only by convention (the hub is a local, pi-palace-managed
@@ -68,6 +69,12 @@ export interface McpSettings {
 	// (submitMcpToolJobWaiting) regardless of this setting — this only
 	// changes the read path.
 	transport: McpTransport;
+	// stdio only: "persistent" keeps one MCP process open for the whole session
+	// (lowest latency, resident memory); "per-call" (default) spawns a short-lived
+	// process for tool discovery and for each read call (no resident memory,
+	// higher per-call latency). Applies to light and full alike, but `full` in
+	// http transport keeps using the hub regardless. Writes are unaffected.
+	connection: McpConnection;
 	http: McpHttpSettings;
 }
 
@@ -146,6 +153,7 @@ const DEFAULTS: Omit<AutosaveSettings, "model"> = {
 		light: { enabled: true },
 		full: { enabled: false },
 		transport: "stdio",
+		connection: "per-call",
 		http: { host: "127.0.0.1", port: 8765 },
 	},
 	// "require" for both: never let an external `mempalace mine` (manual run,
@@ -175,7 +183,7 @@ interface RawSettingsShape {
 		dailyMine: Partial<DailyMineSettings>;
 		model: Partial<ModelSettings>;
 		injectWakeUp: Partial<InjectWakeUpSettings> & { source?: InjectWakeUpSource };
-		mcp: Partial<{ light: Partial<{ enabled: boolean }>; full: Partial<{ enabled: boolean }>; transport: McpTransport; http: Partial<McpHttpSettings> }>;
+		mcp: Partial<{ light: Partial<{ enabled: boolean }>; full: Partial<{ enabled: boolean }>; transport: McpTransport; connection: McpConnection; http: Partial<McpHttpSettings> }>;
 		writeRouting: Partial<WriteRoutingSettings>;
 		forceMemoryRecall: Partial<ForceMemoryRecallSettings>;
 	}>;
@@ -273,6 +281,8 @@ export async function loadAutosaveSettings(
 	};
 	const rawMcpTransport = projectRaw?.piPalace?.mcp?.transport ?? globalRaw?.piPalace?.mcp?.transport;
 	const transport: McpTransport = rawMcpTransport === "http" ? "http" : "stdio";
+	const rawMcpConnection = projectRaw?.piPalace?.mcp?.connection ?? globalRaw?.piPalace?.mcp?.connection;
+	const connection: McpConnection = rawMcpConnection === "persistent" ? "persistent" : "per-call";
 	const rawMcpHttp = {
 		...DEFAULTS.mcp.http,
 		...globalRaw?.piPalace?.mcp?.http,
@@ -290,6 +300,7 @@ export async function loadAutosaveSettings(
 		light: { enabled: rawMcpLight.enabled !== false }, // default true unless explicitly disabled
 		full: { enabled: rawMcpFull.enabled === true },
 		transport,
+		connection,
 		http,
 	};
 

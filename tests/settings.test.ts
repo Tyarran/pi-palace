@@ -108,3 +108,31 @@ describe("loadAutosaveSettings — writeRouting", () => {
 		expect(settings.writeRouting.cli).toBe("require");
 	});
 });
+
+describe("loadAutosaveSettings — mcp.connection", () => {
+	test("defaults to per-call", async () => {
+		const settings = await loadSettings();
+		expect(settings.mcp.connection).toBe("per-call");
+	});
+
+	test("accepts an explicit persistent connection", async () => {
+		await writeProjectSettings({ mcp: { connection: "persistent" } });
+		const settings = await loadSettings();
+		expect(settings.mcp.connection).toBe("persistent");
+	});
+
+	test("falls back to per-call for unrecognized values", async () => {
+		for (const bad of ["carrier-pigeon", 42, null]) {
+			await writeProjectSettings({ mcp: { connection: bad } });
+			const settings = await loadSettings();
+			expect(settings.mcp.connection).toBe("per-call");
+		}
+	});
+
+	test("project setting wins over the global one", async () => {
+		await writeFile(globalSettingsPath, JSON.stringify({ piPalace: { mcp: { connection: "persistent" } } }), "utf8");
+		expect((await loadSettings()).mcp.connection).toBe("persistent");
+		await writeProjectSettings({ mcp: { connection: "per-call" } });
+		expect((await loadSettings()).mcp.connection).toBe("per-call");
+	});
+});
