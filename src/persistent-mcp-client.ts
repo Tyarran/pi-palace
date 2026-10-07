@@ -106,13 +106,25 @@ export class PersistentMcpClient {
 			const id = this.nextId++;
 			payload.id = id;
 			const promise = new Promise<JsonRpcResponse>((resolve, reject) => {
-				this.pending.set(id, { resolve, reject });
-				setTimeout(() => {
+				// The timer must be cleared as soon as the call settles (response,
+				// exit or error): left armed, it keeps the event loop alive for up to
+				// timeoutMs after the client is done, which can hang `pi -p`.
+				const timer = setTimeout(() => {
 					if (this.pending.has(id)) {
 						this.pending.delete(id);
 						reject(new Error(`MCP call ${method} timed out after ${timeoutMs}ms`));
 					}
 				}, timeoutMs);
+				this.pending.set(id, {
+					resolve: (v) => {
+						clearTimeout(timer);
+						resolve(v);
+					},
+					reject: (e) => {
+						clearTimeout(timer);
+						reject(e);
+					},
+				});
 			});
 			this.child.stdin.write(`${JSON.stringify(payload)}\n`);
 			return promise;
