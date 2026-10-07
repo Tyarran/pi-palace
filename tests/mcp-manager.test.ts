@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test";
-import { isReadOnlyCoordinateCall, isReadOnlyTool, type ReadCapableClient, readDiaryVia } from "../src/mcp-manager.js";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { initMcpManager, isReadOnlyCoordinateCall, isReadOnlyTool, type ReadCapableClient, readDiaryVia } from "../src/mcp-manager.js";
+import type { AutosaveSettings, McpConnection } from "../src/settings.js";
+import { type FakeMcp, installFakeMcp, isAlive, waitForExit } from "./helpers/fake-mcp-server.js";
 
 function fakeClient(response: unknown): ReadCapableClient {
 	return {
@@ -118,5 +121,93 @@ describe("readDiaryVia", () => {
 
 	test("throws when neither connection is available", async () => {
 		await expect(readDiaryVia(null, null, "pi", 5)).rejects.toThrow(/no MemPalace MCP connection available/);
+	});
+});
+
+describe("initMcpManager — mcp.connection", () => {
+	let fake: FakeMcp;
+
+	beforeEach(async () => {
+		fake = await installFakeMcp();
+	});
+
+	afterEach(async () => {
+		await fake.restore();
+	});
+
+	function makeSettings(connection: McpConnection, overrides: { full?: boolean; light?: boolean } = {}): AutosaveSettings {
+		return {
+			mcp: {
+				light: { enabled: overrides.light ?? true },
+				full: { enabled: overrides.full ?? false },
+				transport: "stdio",
+				connection,
+				http: { host: "127.0.0.1", port: 8765 },
+			},
+		} as unknown as AutosaveSettings;
+	}
+
+	function fakePi() {
+		const registered: Array<{ name: string; execute: (id: string, params: unknown) => Promise<unknown> }> = [];
+		const pi = { registerTool: (t: (typeof registered)[number]) => registered.push(t) } as unknown as ExtensionAPI;
+		return { pi, registered };
+	}
+
+	test("per-call: discovers tools with one short-lived process, then spawns one per read", async () => {
+		const { pi, registered } = fakePi();
+		const manager = await initMcpManager(pi, makeSettings("per-call"));
+		expect(manager.light).not.toBeNull();
+		expect(registered.map((t) => t.name)).toEqual(["palace_query"]);
+		expect(fake.spawnCount()).toBe(1);
+		await waitForExit(fake.pids()[0]);
+
+		await registered[0].execute("id", { target: "status" });
+		expect(fake.spawnCount()).toBe(2);
+		await waitForExit(fake.pids()[1]);
+		expect(() => manager.close()).not.toThrow();
+	});
+
+	test("per-call: readDiary spawns one process", async () => {
+		const { pi } = fakePi();
+		const manager = await initMcpManager(pi, makeSettings("per-call"));
+		await manager.readDiary("pi", 3);
+		expect(fake.spawnCount()).toBe(2);
+		manager.close();
+	});
+
+	test("persistent: one process for the whole session, killed on close()", async () => {
+		const { pi, registered } = fakePi();
+		const manager = await initMcpManager(pi, makeSettings("persistent"));
+		expect(fake.spawnCount()).toBe(1);
+		await registered[0].execute("id", {});
+		await manager.readDiary("pi", 3);
+		expect(fake.spawnCount()).toBe(1);
+		expect(isAlive(fake.pids()[0])).toBe(true);
+		manager.close();
+		await waitForExit(fake.pids()[0]);
+	});
+
+	test("per-call with full over stdio: both servers are probed at init", async () => {
+		const { pi } = fakePi();
+		const manager = await initMcpManager(pi, makeSettings("per-call", { full: true }));
+		expect(fake.spawnCount()).toBe(2);
+		expect(manager.full).not.toBeNull();
+		await Promise.all(fake.pids().map((pid) => waitForExit(pid)));
+		manager.close();
+	});
+
+	test("per-call: a failing init degrades light to null without throwing or leaving processes", async () => {
+		const { pi } = fakePi();
+		process.env.FAKE_MCP_FAIL_CALL = "1"; // irrelevant to init; keep fake alive
+		const savedPath = process.env.PATH;
+		process.env.PATH = "/nonexistent-dir";
+		try {
+			const manager = await initMcpManager(pi, makeSettings("per-call"));
+			expect(manager.light).toBeNull();
+			manager.close();
+		} finally {
+			process.env.PATH = savedPath;
+		}
+		expect(fake.spawnCount()).toBe(0);
 	});
 });
