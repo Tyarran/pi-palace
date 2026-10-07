@@ -3,22 +3,13 @@ import type { TSchema } from "typebox";
 import { submitMcpToolJobWaiting } from "./daemon-client.js";
 import { HubClient } from "./hub-client.js";
 import { ensureHubRunning } from "./hub-manager.js";
-import { type McpToolCallResult, type McpToolSchema, PersistentMcpClient } from "./persistent-mcp-client.js";
+import { createPerCallMcpClient } from "./per-call-mcp-client.js";
+import { type McpToolCallResult, PersistentMcpClient, type ReadCapableClient } from "./persistent-mcp-client.js";
 import type { AutosaveSettings } from "./settings.js";
 
-/**
- * What `registerServerTools` needs from a connection — satisfied structurally
- * by both `PersistentMcpClient` (stdio, the only transport `light` ever uses —
- * `mempalace-light-mcp` has no HTTP transport of its own, see hub-manager.ts's
- * doc comment) and `HubClient` (HTTP, used for `full`'s read path when
- * `piPalace.mcp.transport === "http"`). Write execution never touches this —
- * every mutating tool call goes through `submitMcpToolJobWaiting` regardless
- * of which client discovered/read it (see `registerServerTools` below).
- */
-export interface ReadCapableClient {
-	listTools(): Promise<McpToolSchema[]>;
-	callTool(name: string, args: Record<string, unknown>): Promise<McpToolCallResult>;
-}
+// ReadCapableClient lives in persistent-mcp-client.ts (shared with
+// per-call-mcp-client.ts without an import cycle); re-exported for callers.
+export type { ReadCapableClient };
 
 /**
  * Read-only `mempalace_*` tool names — called directly against the

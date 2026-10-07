@@ -32,6 +32,20 @@ export interface McpToolCallResult {
 	isError?: boolean;
 }
 
+/**
+ * What `registerServerTools` (mcp-manager.ts) needs from a connection —
+ * satisfied structurally by `PersistentMcpClient` (long-lived stdio),
+ * `PerCallMcpClient` (ephemeral stdio, see per-call-mcp-client.ts) and
+ * `HubClient` (HTTP, `full`'s read path when `piPalace.mcp.transport` is
+ * "http"). Write execution never touches this — every mutating tool call goes
+ * through `submitMcpToolJobWaiting` regardless of which client discovered it.
+ * Lives here (re-exported from mcp-manager.ts) to avoid an import cycle.
+ */
+export interface ReadCapableClient {
+	listTools(): Promise<McpToolSchema[]>;
+	callTool(name: string, args: Record<string, unknown>): Promise<McpToolCallResult>;
+}
+
 export class PersistentMcpClient {
 	private child: ChildProcessWithoutNullStreams;
 	private buffer = "";
@@ -41,7 +55,11 @@ export class PersistentMcpClient {
 	private readyPromise: Promise<void>;
 	private closed = false;
 
-	constructor(command: string) {
+	constructor(
+		command: string,
+		// Per-call timeout; overridable mainly so tests do not wait 30s.
+		private readonly callTimeoutMs = 30_000,
+	) {
 		this.child = spawn(command, [], { stdio: ["pipe", "pipe", "pipe"] });
 
 		// Without this, a spawn failure (e.g. ENOENT if `command` isn't on
@@ -95,7 +113,7 @@ export class PersistentMcpClient {
 
 	private send(method: string, params: unknown, expectResponse: true, timeoutMs?: number): Promise<JsonRpcResponse>;
 	private send(method: string, params: unknown, expectResponse: false): void;
-	private send(method: string, params: unknown, expectResponse: boolean, timeoutMs = 30_000) {
+	private send(method: string, params: unknown, expectResponse: boolean, timeoutMs = this.callTimeoutMs) {
 		if (this.closed) {
 			const err = new Error("MCP client is closed");
 			if (expectResponse) return Promise.reject(err);
